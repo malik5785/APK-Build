@@ -1,0 +1,7 @@
+V9 continuous NPC movement update
+- 36 NPCs start along existing illustrative street loops, not random positions inside buildings.
+- NPCs follow sidewalk-offset waypoints and automatically advance when stuck.
+- NPC simulation continues even while wardrobe is open.
+- Increased walking speeds and added simple bob animation.
+- Removed duplicate car initialization.
+LIMITATIONS: still illustrative roads, primitive models, no genuine navmesh or exact Makkah map. Not run-tested in Godot.

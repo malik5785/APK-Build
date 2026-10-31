@@ -1,0 +1,22 @@
+V10 - what changed (all 8 requests)
+1 PEOPLE: new stylised people with head, ears, nose, eyes, arms and legs that swing when walking,
+  ghutra / cap / kufi / hijab, abaya. NOT photo-real (needs a 3D character model file, e.g. Mixamo).
+2 SOLID WORLD: buildings, lamp posts, trees, signs, bins, mountains, the Haram, the clock tower and
+  map edges are solid for the player, cars and people. Traffic stops for people and the player.
+3 ROAD DETAILS: lane lines, double yellow on big roads, crosswalks, sidewalks, lamps, green direction
+  signs, shop/hotel names (English + Arabic) on every building, 18 wall colours, palms + trees,
+  clouds, sun and moon. Store NAMES are text only - no brand logos.
+4 MAP: roads were traced by hand from your FULL MAP picture (map_data.gd) - ring road, diagonals,
+  top roads, east road. The map button shows your picture with the roads on top and the 9 district
+  names. Start = the pin on your map. It is an approximation of the picture, not GPS data.
+5 SOUND: engine (pitch follows speed), horn (H / X), footsteps, crowd voices from people, birds
+  placed at trees, city ambience. AZAN: needs a recording - copy it to audio/azan.ogg (or .mp3/.wav)
+  before building. It then plays from the Haram at 5 prayer times and with the AZAN button / Z key.
+6 CARS: sedan, SUV, hatchback, pickup, van, bus, truck, taxi, police - different shapes, 10 colours,
+  36 cars. Original badge shapes + make name (TOYOTA, LEXUS, HYUNDAI, KIA, NISSAN, FORD, GMC...).
+7 DAY/NIGHT: sunset colours, moon + moonlight, street lights that switch on (only nearest 8 are real
+  lights for speed), lit windows and shop signs, car headlights, dark alleys, flashing police cars.
+8 CHANGING ROOM: B / CLOTHES. Camera turns to your character. Top, bottom, shoes, head wear, glasses.
+CONTROLS (TV remote): Up/Down move, Left/Right turn, OK/Enter = enter/exit car. Gamepad also works.
+NOT TESTED ON A DEVICE: this was written without being able to run it. If the cloud build shows
+errors, send me the "smoke-test-log" text.

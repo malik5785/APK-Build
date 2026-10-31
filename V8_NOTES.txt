@@ -1,0 +1,1 @@
+V8 stability patch to existing V7. Changes: responsive UI root; traffic gravity/ground correction; intersection-aware building placement; road loop created before buildings; safer driving and pedestrian gravity; wardrobe text cleanup. This is not an imported Makkah GIS map or photorealistic assets. Not run-tested in Godot.

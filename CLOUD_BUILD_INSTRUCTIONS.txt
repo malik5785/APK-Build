@@ -1,0 +1,7 @@
+ONLINE APK BUILD — CITY FREEDOM MAKKAH V10
+1. Create a GitHub repository and upload the contents of this ZIP to the repository root (not inside another folder). Keep the .github/workflows/build-android.yml file.
+2. Go to Actions > Build City Freedom Makkah Android APK > Run workflow.
+3. If successful, open the completed run and download the CityFreedom-Makkah-Android-APK artifact (the APK is inside it).
+4. If it fails, inspect the build log; Godot version 4.7.2 must exist in the action installer, and a debug signing configuration may be needed.
+This is a BUILD-READY SOURCE PACKAGE, not an APK. The build has not been run, and Android TV controls have not been verified.
+The original V10 gameplay is retained; no graphics/map changes beyond V10 City Recovery.
