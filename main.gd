@@ -4,6 +4,7 @@ extends Node3D
 # World geometry is merged into few meshes per area ("batching") so it runs on a TV.
 const CHUNK := 400.0
 
+var game_initialized := false
 var player: CharacterBody3D
 var car: CharacterBody3D
 var camera: Camera3D
@@ -117,6 +118,7 @@ func _ready() -> void:
 	add_child(camera)
 	await _flush_batches()
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	game_initialized = true
 
 # ---------------------------------------------------------------- materials
 func _mat_key(c: Color) -> String:
@@ -1966,6 +1968,8 @@ func _update_time(delta: float) -> void:
 
 # ---------------------------------------------------------------- main loop
 func _physics_process(delta: float) -> void:
+	if not game_initialized or not is_instance_valid(player) or not is_instance_valid(car) or not is_instance_valid(camera):
+		return
 	_update_time(delta)
 	_advance_traffic(delta)
 	_update_npcs(delta)
