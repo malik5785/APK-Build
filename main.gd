@@ -1,15 +1,22 @@
 extends Node3D
 # City Freedom - Makkah  V10
-# Roads come from map_data.gd (traced from the user's FULL MAP picture).
+# Roads, buildings, names: real OpenStreetMap data of central Makkah (data/city.json).
 # World geometry is merged into few meshes per area ("batching") so it runs on a TV.
-const MapData := preload("res://map_data.gd")
-const CHUNK := 90.0
-const WORLD_HALF := Vector2(520.0, 380.0)
+const CHUNK := 400.0
 
 var player: CharacterBody3D
 var car: CharacterBody3D
 var camera: Camera3D
 var rng := RandomNumberGenerator.new()
+var city: Dictionary = {}
+var world_min := Vector2(-4000.0, -1500.0)
+var world_max := Vector2(2300.0, 2100.0)
+var start_pos := Vector2(0.0, 300.0)
+var start_dir := Vector2(0.0, -1.0)
+var districts: Array = []
+var npc_roads: Array = []
+var road_cells := {}
+var map_redraw_timer := 0.0
 var driving := false
 var first_person := false
 var yaw := 0.0
@@ -21,6 +28,7 @@ var time_of_day := 10.0
 var sun_light: DirectionalLight3D
 var moon_light: DirectionalLight3D
 var city_environment: Environment
+var sky_mat: ProceduralSkyMaterial
 var sun_mesh: MeshInstance3D
 var moon_mesh: MeshInstance3D
 var cloud_nodes: Array = []
@@ -89,6 +97,7 @@ var last_prayer_hour := -1
 
 func _ready() -> void:
 	rng.seed = 4261
+	_load_city()
 	_create_world()
 	_create_roads_and_city()
 	_create_haram()
@@ -102,7 +111,8 @@ func _ready() -> void:
 	_resize_ui()
 	camera = Camera3D.new()
 	camera.current = true
-	camera.far = 900.0
+	camera.near = 0.4
+	camera.far = 6000.0
 	add_child(camera)
 	_flush_batches()
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
@@ -112,12 +122,49 @@ func _mat_key(c: Color) -> String:
 	return "c:" + c.to_html(false)
 
 func _get_mat(key: String) -> StandardMaterial3D:
+	key = key.replace("#sky", "")
 	if mats.has(key):
 		return mats[key]
 	var m := StandardMaterial3D.new()
 	m.roughness = 1.0
 	if key.begins_with("c:"):
 		m.albedo_color = Color.html(key.substr(2))
+	elif key.begins_with("w:") or key.begins_with("tex:"):
+		var tname := "plaster"
+		if key.begins_with("w:"):
+			m.albedo_color = Color.html(key.substr(2))
+			m.roughness = 0.95
+		else:
+			tname = key.substr(4)
+			m.roughness = 0.88 if tname == "asphalt" else 0.8
+			m.albedo_color = Color(1, 1, 1)
+		var tpath := "res://tex/" + tname + ".png"
+		if ResourceLoader.exists(tpath):
+			m.albedo_texture = load(tpath)
+			m.uv1_triplanar = true
+			m.uv1_world_triplanar = true
+			var sc := 0.2 if tname == "asphalt" else (0.5 if tname == "sidewalk" else 0.18)
+			m.uv1_scale = Vector3(sc, sc, sc)
+	elif key.begins_with("f:"):
+		m.albedo_color = Color.html(key.substr(2))
+		m.roughness = 0.9
+		if ResourceLoader.exists("res://tex/facade.png"):
+			m.albedo_texture = load("res://tex/facade.png")
+			m.uv1_triplanar = true
+			m.uv1_world_triplanar = true
+			m.uv1_scale = Vector3(0.3125, 0.3125, 0.3125)
+		if ResourceLoader.exists("res://tex/facade_emit.png"):
+			m.emission_enabled = true
+			m.emission_texture = load("res://tex/facade_emit.png")
+			m.emission_energy_multiplier = 0.0
+			night_mats.append([m, 0.0, 1.4])
+	elif key.begins_with("d:"):
+		m.albedo_color = Color.html(key.substr(2))
+		m.roughness = 1.0
+	elif key.begins_with("p:"):
+		m.albedo_color = Color.html(key.substr(2))
+		m.metallic = 0.35
+		m.roughness = 0.38
 	elif key.begins_with("e:"):
 		# emissive: colour glows at night (shop signs, lamps, headlights)
 		var col := Color.html(key.substr(2))
@@ -141,6 +188,8 @@ func _get_mat(key: String) -> StandardMaterial3D:
 		m.emission = fc
 		m.emission_energy_multiplier = 0.3
 		police_flash_mats.append(m)
+	if key.begins_with("w:") or key.begins_with("tex:") or key.begins_with("f:") or key.begins_with("d:"):
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mats[key] = m
 	return m
 
@@ -183,8 +232,14 @@ func _flush_batches() -> void:
 		var st: SurfaceTool = batches[key]
 		var mi := MeshInstance3D.new()
 		mi.mesh = st.commit()
-		mi.visibility_range_end = 420.0
-		mi.visibility_range_end_margin = 40.0
+		var ks := str(key)
+		var vis := 520.0
+		if ks.contains("#sky"):
+			vis = 4500.0
+		elif ks.begins_with("f:") or ks.begins_with("w:"):
+			vis = 850.0
+		mi.visibility_range_end = vis
+		mi.visibility_range_end_margin = 60.0
 		add_child(mi)
 	batches.clear()
 
@@ -216,21 +271,34 @@ func _label(parent: Node, text: String, pos: Vector3, px: float, col: Color, vis
 func _create_world() -> void:
 	var we := WorldEnvironment.new()
 	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
 	env.background_color = Color(0.65, 0.79, 0.91)
+	sky_mat = ProceduralSkyMaterial.new()
+	sky_mat.sky_curve = 0.18
+	sky_mat.ground_curve = 0.05
+	var sky_res := Sky.new()
+	sky_res.sky_material = sky_mat
+	env.sky = sky_res
+	env.background_mode = Environment.BG_SKY
+	env.glow_enabled = true
+	env.glow_intensity = 0.0
+	env.glow_hdr_threshold = 0.9
+	env.glow_bloom = 0.08
 	city_environment = env
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color(0.85, 0.83, 0.76)
 	env.ambient_light_energy = 0.68
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	env.adjustment_enabled = true
+	env.adjustment_contrast = 1.08
+	env.adjustment_saturation = 1.08
 	env.fog_enabled = true
-	env.fog_density = 0.0016
+	env.fog_density = 0.00045
 	env.fog_light_color = Color(0.78, 0.84, 0.9)
 	we.environment = env
 	add_child(we)
 	sun_light = DirectionalLight3D.new()
 	sun_light.shadow_enabled = true
-	sun_light.directional_shadow_max_distance = 110.0
+	sun_light.directional_shadow_max_distance = 140.0
 	add_child(sun_light)
 	moon_light = DirectionalLight3D.new()
 	moon_light.light_color = Color(0.62, 0.72, 1.0)
@@ -239,33 +307,59 @@ func _create_world() -> void:
 	# ground
 	var ground := MeshInstance3D.new()
 	var gm := BoxMesh.new()
-	gm.size = Vector3(1500, 1.0, 1200)
+	var wcenter := (world_min + world_max) * 0.5
+	var wsize := world_max - world_min
+	gm.size = Vector3(wsize.x + 9000.0, 1.0, wsize.y + 9000.0)
 	ground.mesh = gm
-	ground.material_override = _mat(Color(0.72, 0.65, 0.49))
-	ground.position = Vector3(0, -0.53, 0)
+	var gmat := StandardMaterial3D.new()
+	gmat.albedo_color = Color(0.86, 0.78, 0.60)
+	gmat.roughness = 1.0
+	var gn := FastNoiseLite.new()
+	gn.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	gn.frequency = 0.02
+	var gtex := NoiseTexture2D.new()
+	gtex.width = 256
+	gtex.height = 256
+	gtex.seamless = true
+	gtex.noise = gn
+	var gramp := Gradient.new()
+	gramp.set_color(0, Color(0.70, 0.66, 0.58))
+	gramp.set_color(1, Color(1.0, 1.0, 1.0))
+	gtex.color_ramp = gramp
+	gmat.albedo_texture = gtex
+	gmat.uv1_scale = Vector3(34, 28, 1)
+	if ResourceLoader.exists("res://tex/sand.png"):
+		gmat.albedo_texture = load("res://tex/sand.png")
+		gmat.uv1_scale = Vector3(0.12, 0.12, 0.12)
+		gmat.uv1_triplanar = true
+		gmat.uv1_world_triplanar = true
+	ground.material_override = gmat
+	ground.position = Vector3(wcenter.x, -0.53, wcenter.y)
 	add_child(ground)
-	_solid(Vector3(0, -0.53, 0), Vector3(1500, 1.0, 1200))
+	_solid(Vector3(wcenter.x, -0.53, wcenter.y), Vector3(wsize.x + 9000.0, 1.0, wsize.y + 9000.0))
 	# invisible walls so nothing leaves the map
-	var wx := WORLD_HALF.x + 12.0
-	var wz := WORLD_HALF.y + 12.0
-	_solid(Vector3(wx, 10, 0), Vector3(4, 40, 1200))
-	_solid(Vector3(-wx, 10, 0), Vector3(4, 40, 1200))
-	_solid(Vector3(0, 10, wz), Vector3(1500, 40, 4))
-	_solid(Vector3(0, 10, -wz), Vector3(1500, 40, 4))
-	# mountains ring (visible and solid)
-	for i in range(30):
-		var ang := float(i) / 30.0 * TAU
-		var r := rng.randf_range(38.0, 80.0)
+	var wl := world_min.x - 30.0
+	var wr := world_max.x + 30.0
+	var wt := world_min.y - 30.0
+	var wb := world_max.y + 30.0
+	_solid(Vector3(wr, 20, wcenter.y), Vector3(4, 80, wsize.y + 200.0))
+	_solid(Vector3(wl, 20, wcenter.y), Vector3(4, 80, wsize.y + 200.0))
+	_solid(Vector3(wcenter.x, 20, wb), Vector3(wsize.x + 200.0, 80, 4))
+	_solid(Vector3(wcenter.x, 20, wt), Vector3(wsize.x + 200.0, 80, 4))
+	# mountains all around Makkah (visible and solid)
+	for i in range(44):
+		var ang := float(i) / 44.0 * TAU
+		var r := rng.randf_range(160.0, 380.0)
 		var hill := MeshInstance3D.new()
 		var sm := SphereMesh.new()
 		sm.radius = r
 		sm.height = r * 2.0
-		sm.radial_segments = 14
-		sm.rings = 7
+		sm.radial_segments = 16
+		sm.rings = 8
 		hill.mesh = sm
 		var shade := rng.randf_range(-0.07, 0.05)
 		hill.material_override = _mat(Color(0.50 + shade, 0.42 + shade, 0.32 + shade))
-		hill.position = Vector3(cos(ang) * 660.0, -r * 0.55, sin(ang) * 520.0)
+		hill.position = Vector3(wcenter.x + cos(ang) * (wsize.x * 0.5 + 650.0), -r * 0.62, wcenter.y + sin(ang) * (wsize.y * 0.5 + 600.0))
 		add_child(hill)
 		var hb := StaticBody3D.new()
 		hb.position = hill.position
@@ -276,26 +370,26 @@ func _create_world() -> void:
 		hb.add_child(hc)
 		add_child(hb)
 	# sun, moon (unshaded discs that follow the camera)
-	sun_mesh = _sky_disc(Color(1.0, 0.93, 0.62), 22.0)
-	moon_mesh = _sky_disc(Color(0.88, 0.92, 1.0), 14.0)
+	sun_mesh = _sky_disc(Color(1.0, 0.93, 0.62), 170.0)
+	moon_mesh = _sky_disc(Color(0.88, 0.92, 1.0), 110.0)
 	# clouds
 	cloud_mat = StandardMaterial3D.new()
 	cloud_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	cloud_mat.albedo_color = Color(1, 1, 1, 0.92)
 	cloud_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	for i in range(18):
+	for i in range(34):
 		var cloud := Node3D.new()
-		cloud.position = Vector3(rng.randf_range(-650, 650), rng.randf_range(95, 150), rng.randf_range(-550, 550))
+		cloud.position = Vector3(rng.randf_range(world_min.x - 600.0, world_max.x + 600.0), rng.randf_range(140, 240), rng.randf_range(world_min.y - 600.0, world_max.y + 600.0))
 		for k in range(5):
 			var puff := MeshInstance3D.new()
 			var pm := SphereMesh.new()
-			pm.radius = rng.randf_range(14, 26)
+			pm.radius = rng.randf_range(30, 55)
 			pm.height = pm.radius * 1.1
 			pm.radial_segments = 8
 			pm.rings = 4
 			puff.mesh = pm
 			puff.material_override = cloud_mat
-			puff.position = Vector3(k * 20.0 - 40.0, rng.randf_range(-3, 5), rng.randf_range(-8, 8))
+			puff.position = Vector3(k * 40.0 - 80.0, rng.randf_range(-5, 8), rng.randf_range(-16, 16))
 			puff.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			cloud.add_child(puff)
 		add_child(cloud)
@@ -318,11 +412,29 @@ func _sky_disc(col: Color, radius: float) -> MeshInstance3D:
 	add_child(mi)
 	return mi
 
-# ---------------------------------------------------------------- roads + buildings
-const WALLS := ["d9c7a3", "c9b48a", "e6d8bb", "b89f7a", "d8b49a", "c7a58a", "e7ddc8", "cdbf9f", "a89577", "d3c1ae", "bfa88f", "e1cfb0", "c58f6b", "d6a67a", "9fb5b5", "b9c4a6", "e2b9a0", "c9d3d8"]
-const SIGN_COLORS := ["c8102e", "6a1b9a", "00704a", "d4a017", "1565c0", "e65100", "ad1457", "263238", "2e7d32", "f9a825"]
-const STORES := [["BinDawood", "بن داود"], ["stc", "stc"], ["McDonald's", "ماكدونالدز"], ["Starbucks", "ستاربكس"], ["Al Baik", "البيك"], ["Nahdi Pharmacy", "صيدلية النهدي"], ["Panda", "بنده"], ["Al Rajhi Bank", "مصرف الراجحي"], ["Jarir Bookstore", "مكتبة جرير"], ["Bakery", "مخبز"], ["Zamzam Perfumes", "عطور زمزم"], ["Dates & Sweets", "تمور وحلويات"], ["Pharmacy", "صيدلية"], ["Laundry", "مغسلة"], ["Barber", "حلاق"], ["Mobile Shop", "جوالات"], ["Restaurant", "مطعم"], ["Supermarket", "سوبرماركت"], ["Gold Souq", "سوق الذهب"], ["Cafe", "مقهى"]]
-const HOTELS := [["Makkah Towers Hotel", "فندق أبراج مكة"], ["Zamzam Hotel", "فندق زمزم"], ["Al Safwah Hotel", "فندق الصفوة"], ["Elaf Hotel", "فندق إيلاف"], ["Al Marwa Hotel", "فندق المروة"], ["Dar Al Salam Hotel", "فندق دار السلام"], ["Al Aziziyah Suites", "أجنحة العزيزية"]]
+# ---------------------------------------------------------------- city from OpenStreetMap (data/city.json)
+func _load_city() -> void:
+	var txt := FileAccess.get_file_as_string("res://data/city.json")
+	var parsed = JSON.parse_string(txt)
+	if parsed == null or not (parsed is Dictionary):
+		push_error("city.json could not be loaded")
+		city = {"bounds": [-500, -500, 500, 500], "start": [0, 0], "sdir": [0, -1], "roads": [], "bld": [], "areas": [], "poi": [], "bus": [], "sig": [], "mosq": [], "trees": [], "dist": []}
+	else:
+		city = parsed
+	var b: Array = city["bounds"]
+	world_min = Vector2(float(b[0]), float(b[1]))
+	world_max = Vector2(float(b[2]), float(b[3]))
+	var s: Array = city["start"]
+	start_pos = Vector2(float(s[0]), float(s[1]))
+	var sd: Array = city["sdir"]
+	start_dir = Vector2(float(sd[0]), float(sd[1])).normalized()
+	districts = city["dist"]
+
+func _v2list(arr: Array) -> Array:
+	var out: Array = []
+	for p in arr:
+		out.append(Vector2(float(p[0]), float(p[1])))
+	return out
 
 func _grid_key(p: Vector2, cell: float) -> Vector2i:
 	return Vector2i(int(floor(p.x / cell)), int(floor(p.y / cell)))
@@ -330,231 +442,358 @@ func _grid_key(p: Vector2, cell: float) -> Vector2i:
 func _add_road(a: Vector2, b: Vector2, w: float) -> void:
 	var idx := roads.size()
 	roads.append([a, b, w])
-	var steps := int(a.distance_to(b) / 8.0) + 1
+	var steps := int(a.distance_to(b) / 40.0) + 1
 	for s in range(steps + 1):
-		var p := a.lerp(b, float(s) / float(steps))
-		var c := _grid_key(p, 24.0)
-		for dx in range(-1, 2):
-			for dz in range(-1, 2):
-				var k := Vector2i(c.x + dx, c.y + dz)
-				if not road_grid.has(k):
-					road_grid[k] = []
-				var lst: Array = road_grid[k]
-				if not lst.has(idx):
-					lst.append(idx)
+		var c := _grid_key(a.lerp(b, float(s) / float(steps)), 100.0)
+		if not road_cells.has(c):
+			road_cells[c] = []
+		var lst: Array = road_cells[c]
+		if not lst.has(idx):
+			lst.append(idx)
 
-func _road_visual(a: Vector2, b: Vector2, w: float) -> void:
-	var d := b - a
-	var length := d.length()
-	if length < 0.5:
+func _st_for(mat_key: String, at: Vector2) -> SurfaceTool:
+	var cx := int(floor(at.x / CHUNK))
+	var cz := int(floor(at.y / CHUNK))
+	var key := "%s|%d|%d" % [mat_key, cx, cz]
+	if batches.has(key):
+		return batches[key]
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_material(_get_mat(mat_key))
+	batches[key] = st
+	return st
+
+func _tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, nrm: Vector3) -> void:
+	st.set_normal(nrm)
+	st.add_vertex(a)
+	st.set_normal(nrm)
+	st.add_vertex(b)
+	st.set_normal(nrm)
+	st.add_vertex(c)
+
+func _road_pieces(pts: Array, max_len: float) -> Array:
+	var pieces: Array = []
+	var cur: Array = [pts[0]]
+	var acc := 0.0
+	for i in range(1, pts.size()):
+		var prev: Vector2 = cur[cur.size() - 1]
+		var nxt: Vector2 = pts[i]
+		acc += prev.distance_to(nxt)
+		cur.append(nxt)
+		if acc >= max_len and i < pts.size() - 1:
+			pieces.append(cur)
+			cur = [nxt]
+			acc = 0.0
+	if cur.size() >= 2:
+		pieces.append(cur)
+	return pieces
+
+func _offset_line(pts: Array, off: float) -> Array:
+	var out: Array = []
+	var n := pts.size()
+	for i in range(n):
+		var p: Vector2 = pts[i]
+		var d := Vector2.ZERO
+		if i > 0:
+			d += (p - (pts[i - 1] as Vector2)).normalized()
+		if i < n - 1:
+			d += ((pts[i + 1] as Vector2) - p).normalized()
+		d = d.normalized()
+		out.append(p + Vector2(-d.y, d.x) * off)
+	return out
+
+func _ribbon(pts: Array, half_w: float, y: float, mat_key: String) -> void:
+	var n := pts.size()
+	if n < 2:
 		return
-	var mid := (a + b) * 0.5
-	var xf := Transform3D(Basis(Vector3.UP, atan2(d.x, d.y)), Vector3(mid.x, 0, mid.y))
-	_bb(xf, Vector3(0, 0.015, 0), Vector3(w, 0.05, length + 0.8), "c:303336")
-	for side in [-1.0, 1.0]:
-		_bb(xf, Vector3(side * (w * 0.5 + 1.0), 0.0, 0), Vector3(1.8, 0.1, length + 0.5), "c:bdb39d")
-		_bb(xf, Vector3(side * (w * 0.5 - 0.3), 0.046, 0), Vector3(0.12, 0.012, length), "c:f0eac4")
-	if w >= 11.0:
-		for off in [-0.14, 0.14]:
-			_bb(xf, Vector3(off, 0.046, 0), Vector3(0.1, 0.012, length), "c:e6b800")
-		for j in range(int(length / 9.0)):
-			for lane in [-w * 0.25, w * 0.25]:
-				_bb(xf, Vector3(lane, 0.046, -length * 0.5 + 5.0 + j * 9.0), Vector3(0.13, 0.012, 3.2), "c:f0f0f0")
-	else:
-		for j in range(int(length / 8.0)):
-			_bb(xf, Vector3(0, 0.046, -length * 0.5 + 4.0 + j * 8.0), Vector3(0.13, 0.012, 3.0), "c:e8d9a0")
-	if length > 50.0:
-		for s in range(-4, 5):
-			_bb(xf, Vector3(s * 1.0, 0.047, 0), Vector3(0.5, 0.012, 3.2), "c:f4f4f4")
+	var left: Array = []
+	var right: Array = []
+	for i in range(n):
+		var p: Vector2 = pts[i]
+		var d1 := Vector2.ZERO
+		var d2 := Vector2.ZERO
+		if i > 0:
+			d1 = (p - (pts[i - 1] as Vector2)).normalized()
+		if i < n - 1:
+			d2 = ((pts[i + 1] as Vector2) - p).normalized()
+		var refd := d2 if i < n - 1 else d1
+		var d := (d1 + d2).normalized()
+		if d.length() < 0.5:
+			d = refd
+		var nrm := Vector2(-d.y, d.x)
+		var refn := Vector2(-refd.y, refd.x)
+		var k := 1.0 / maxf(nrm.dot(refn), 0.6)
+		left.append(p + nrm * half_w * k)
+		right.append(p - nrm * half_w * k)
+	var first: Vector2 = pts[0]
+	var st := _st_for(mat_key, first)
+	for i in range(n - 1):
+		var l0: Vector2 = left[i]
+		var r0: Vector2 = right[i]
+		var l1: Vector2 = left[i + 1]
+		var r1: Vector2 = right[i + 1]
+		_tri(st, Vector3(l0.x, y, l0.y), Vector3(r0.x, y, r0.y), Vector3(r1.x, y, r1.y), Vector3.UP)
+		_tri(st, Vector3(l0.x, y, l0.y), Vector3(r1.x, y, r1.y), Vector3(l1.x, y, l1.y), Vector3.UP)
+
+func _poly_area(p: Array) -> float:
+	var a := 0.0
+	for i in range(p.size()):
+		var q: Vector2 = p[i]
+		var r: Vector2 = p[(i + 1) % p.size()]
+		a += q.x * r.y - r.x * q.y
+	return absf(a) * 0.5
 
 func _create_roads_and_city() -> void:
-	for road in MapData.ROADS:
-		var w: float = road[0]
-		var pts: Array = road[1]
+	var lamp_candidates: Array = []
+	for r in city["roads"]:
+		var w: float = float(r[0])
+		var cls: int = int(r[1])
+		var pts: Array = _v2list(r[2])
+		if pts.size() < 2:
+			continue
+		for k in range(pts.size() - 1):
+			_add_road(pts[k], pts[k + 1], w)
+		for piece in _road_pieces(pts, 110.0):
+			_ribbon(piece, w * 0.5 + (2.2 if cls <= 4 else 0.8), 0.02, "tex:sidewalk")
+			_ribbon(piece, w * 0.5, 0.05, "tex:asphalt")
+			if w >= 9.0:
+				_ribbon(piece, 0.13, 0.08, "d:e6b800" if cls <= 1 else "d:f0f0f0")
+				for sgn in [-1.0, 1.0]:
+					_ribbon(_offset_line(piece, float(sgn) * (w * 0.5 - 0.4)), 0.07, 0.08, "d:f0eac4")
+		if cls <= 3 and w >= 9.0:
+			lamp_candidates.append([pts, w])
+	for a in city["areas"]:
+		_city_area(a)
+	for b in city["bld"]:
+		_city_building(b)
+	_place_lamps(lamp_candidates)
+	for t in city["trees"]:
+		_tree(Vector2(float(t[0]), float(t[1])))
+	for p in city["poi"]:
+		_city_poi(p)
+	for bs in city["bus"]:
+		_bus_stop(Vector2(float(bs[0]), float(bs[1])), str(bs[2]))
+	for sg in city["sig"]:
+		_traffic_signal(Vector2(float(sg[0]), float(sg[1])))
+	for m in city["mosq"]:
+		_minaret(Vector2(float(m[0]), float(m[1])), str(m[2]), str(m[3]))
+
+func _city_area(a: Dictionary) -> void:
+	var verts := _v2list(a["v"])
+	var tri: Array = a["t"]
+	var kind: String = a["k"]
+	if verts.size() < 3:
+		return
+	var key := "d:e9e5db#sky"
+	var y := 0.04
+	if kind == "park":
+		key = "d:5f8f45#sky"
+		y = 0.03
+	elif kind == "parking":
+		key = "tex:asphalt#sky"
+	var first: Vector2 = verts[0]
+	var st := _st_for(key, first)
+	for i in range(0, tri.size() - 2, 3):
+		var p0: Vector2 = verts[int(tri[i])]
+		var p1: Vector2 = verts[int(tri[i + 1])]
+		var p2: Vector2 = verts[int(tri[i + 2])]
+		_tri(st, Vector3(p0.x, y, p0.y), Vector3(p1.x, y, p1.y), Vector3(p2.x, y, p2.y), Vector3.UP)
+
+func _city_building(b: Dictionary) -> void:
+	var v: Array = b["v"]
+	var rs: Array = b["r"]
+	var h: float = float(b["h"])
+	var mh: float = float(b["m"])
+	var hex: String = b["c"]
+	var kind: String = b["k"]
+	var verts := _v2list(v)
+	var outer_n := int(rs[0])
+	var cen := Vector2.ZERO
+	for i in range(outer_n):
+		cen += verts[i] as Vector2
+	cen /= float(outer_n)
+	var sky := "#sky" if h > 70.0 else ""
+	var wall_key := "f:" + hex + sky
+	var roof_key := "w:b8ad98" + sky
+	if kind == "kaaba":
+		wall_key = "d:101010" + sky
+		roof_key = "d:101010" + sky
+	var st := _st_for(wall_key, cen)
+	var off := 0
+	for ri in range(rs.size()):
+		var cnt := int(rs[ri])
+		for i in range(cnt):
+			var a: Vector2 = verts[off + i]
+			var c2: Vector2 = verts[off + (i + 1) % cnt]
+			var dd := c2 - a
+			var ln := dd.length()
+			if ln < 0.05:
+				continue
+			var nrm := Vector3(dd.y, 0.0, -dd.x) / ln
+			var a0 := Vector3(a.x, mh, a.y)
+			var a1 := Vector3(a.x, h, a.y)
+			var b0 := Vector3(c2.x, mh, c2.y)
+			var b1 := Vector3(c2.x, h, c2.y)
+			_tri(st, a0, b0, b1, nrm)
+			_tri(st, a0, b1, a1, nrm)
+		off += cnt
+	var rverts := verts
+	if b.has("p"):
+		rverts = _v2list(b["p"])
+	var tri: Array = b["t"]
+	var rst := _st_for(roof_key, cen)
+	for i in range(0, tri.size() - 2, 3):
+		var p0: Vector2 = rverts[int(tri[i])]
+		var p1: Vector2 = rverts[int(tri[i + 1])]
+		var p2: Vector2 = rverts[int(tri[i + 2])]
+		_tri(rst, Vector3(p0.x, h, p0.y), Vector3(p1.x, h, p1.y), Vector3(p2.x, h, p2.y), Vector3.UP)
+	# collision: the Great Mosque is walk-through so you can reach the Kaaba
+	var area := _poly_area(verts.slice(0, outer_n))
+	var en: String = b["n"]
+	var ar: String = b["a"]
+	var open_mosque := area > 60000.0 or en.contains("Great Mosque") or en.contains("Grand Mosque")
+	if not open_mosque and mh < 3.0 and h - mh > 2.0 and area > 6.0:
+		_building_collision(verts, rs, mh, h, area > 2500.0)
+	if en != "" or ar != "":
+		var txt := en
+		if ar != "":
+			txt = (txt + "\n" + ar) if txt != "" else ar
+		var col := Color(1.0, 0.86, 0.5) if kind == "hotel" else Color(1, 1, 1)
+		var l := _label(self, txt, Vector3(cen.x, h + 6.0, cen.y), 0.05, col, 300.0 if h < 100.0 else 1200.0, 0.0)
+		l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+
+func _building_collision(verts: Array, rs: Array, mh: float, h: float, big: bool) -> void:
+	var body := StaticBody3D.new()
+	var outer_n := int(rs[0])
+	if rs.size() == 1 and outer_n <= 24 and not big:
+		var hull := Geometry2D.convex_hull(PackedVector2Array(verts.slice(0, outer_n)))
+		var pts := PackedVector3Array()
+		for hp in hull:
+			pts.append(Vector3(hp.x, mh, hp.y))
+			pts.append(Vector3(hp.x, h, hp.y))
+		if pts.size() < 6:
+			return
+		var cs := CollisionShape3D.new()
+		var shape := ConvexPolygonShape3D.new()
+		shape.points = pts
+		cs.shape = shape
+		body.add_child(cs)
+	else:
+		var off := 0
+		var count := 0
+		for ri in range(rs.size()):
+			var cnt := int(rs[ri])
+			for i in range(cnt):
+				var a: Vector2 = verts[off + i]
+				var b: Vector2 = verts[off + (i + 1) % cnt]
+				var dd := b - a
+				if dd.length() < 2.0 or count > 160:
+					continue
+				var cs2 := CollisionShape3D.new()
+				var bs := BoxShape3D.new()
+				bs.size = Vector3(dd.length(), h - mh, 1.2)
+				cs2.shape = bs
+				cs2.position = Vector3((a.x + b.x) * 0.5, (h + mh) * 0.5, (a.y + b.y) * 0.5)
+				cs2.rotation.y = atan2(-dd.y, dd.x)
+				body.add_child(cs2)
+				count += 1
+			off += cnt
+	add_child(body)
+
+func _city_poi(p: Array) -> void:
+	var pos := Vector3(float(p[0]), 4.4, float(p[1]))
+	var en := str(p[2])
+	var ar := str(p[3])
+	var kind := str(p[4])
+	var col := Color(1, 1, 1)
+	match kind:
+		"food": col = Color(1.0, 0.55, 0.35)
+		"pharm": col = Color(0.45, 1.0, 0.55)
+		"bank": col = Color(0.55, 0.75, 1.0)
+		"shop": col = Color(1.0, 0.9, 0.4)
+		"hotel": col = Color(1.0, 0.86, 0.5)
+	var txt := en
+	if ar != "":
+		txt = (txt + "\n" + ar) if txt != "" else ar
+	var l := _label(self, txt, pos, 0.014, col, 90.0, 0.0)
+	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	var sign_cols := ["c8102e", "00704a", "1565c0", "d4a017", "6a1b9a"]
+	var sc: String = sign_cols[posmod(int(pos.x * 7.0), 5)]
+	_wb(Vector3(pos.x, 3.7, pos.z), Vector3(1.2, 0.7, 0.2), "e:" + sc)
+
+func _bus_stop(p: Vector2, nm: String) -> void:
+	var pos := Vector3(p.x, 0, p.y)
+	_wb(pos + Vector3(0, 2.6, 0), Vector3(3.2, 0.12, 1.5), "c:2b5f7a")
+	_wb(pos + Vector3(-1.5, 1.3, 0), Vector3(0.1, 2.6, 0.1), "c:3d4549")
+	_wb(pos + Vector3(1.5, 1.3, 0), Vector3(0.1, 2.6, 0.1), "c:3d4549")
+	_wb(pos + Vector3(0, 1.4, -0.65), Vector3(3.0, 2.2, 0.06), "c:9fd4e4")
+	_wb(pos + Vector3(0, 0.5, 0.2), Vector3(2.2, 0.08, 0.4), "c:6b4a2b")
+	var l := _label(self, "BUS STOP  موقف حافلات" if nm == "" else nm, pos + Vector3(0, 3.4, 0), 0.012, Color(0.5, 1, 0.6), 70.0, 0.0)
+	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+
+func _traffic_signal(p: Vector2) -> void:
+	var pos := Vector3(p.x, 0, p.y)
+	_wb(pos + Vector3(0, 2.8, 0), Vector3(0.2, 5.6, 0.2), "c:3d4549")
+	_wb(pos + Vector3(0, 5.0, 0), Vector3(0.45, 1.3, 0.4), "c:1c1e21")
+	for zs in [0.22, -0.22]:
+		_wb(pos + Vector3(0, 5.45, zs), Vector3(0.24, 0.24, 0.08), "e:ff3b30")
+		_wb(pos + Vector3(0, 5.0, zs), Vector3(0.24, 0.24, 0.08), "e:ffcc00")
+		_wb(pos + Vector3(0, 4.55, zs), Vector3(0.24, 0.24, 0.08), "e:34c759")
+	_solid(pos + Vector3(0, 2.8, 0), Vector3(0.3, 5.6, 0.3))
+
+func _minaret(p: Vector2, en: String, ar: String) -> void:
+	var pos := Vector3(p.x, 0, p.y)
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.9
+	cyl.bottom_radius = 1.3
+	cyl.height = 30.0
+	cyl.radial_segments = 10
+	var ring := CylinderMesh.new()
+	ring.top_radius = 1.8
+	ring.bottom_radius = 1.8
+	ring.height = 0.5
+	ring.radial_segments = 10
+	var tip := SphereMesh.new()
+	tip.radius = 1.0
+	tip.height = 2.0
+	tip.radial_segments = 8
+	tip.rings = 4
+	_batch_mesh(cyl, Transform3D(Basis.IDENTITY, pos + Vector3(0, 15.0, 0)), "c:efe7d3")
+	_batch_mesh(ring, Transform3D(Basis.IDENTITY, pos + Vector3(0, 24.0, 0)), "c:cfc6ae")
+	_batch_mesh(tip, Transform3D(Basis.IDENTITY, pos + Vector3(0, 31.2, 0)), "c:d4a53a")
+	_solid(pos + Vector3(0, 15.0, 0), Vector3(2.6, 30.0, 2.6))
+	var txt := en
+	if ar != "":
+		txt = (txt + "\n" + ar) if txt != "" else ar
+	if txt != "":
+		var l := _label(self, txt, pos + Vector3(0, 35.0, 0), 0.03, Color(0.7, 1.0, 0.8), 400.0, 0.0)
+		l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+
+func _place_lamps(cands: Array) -> void:
+	var spots: Array = []
+	for c in cands:
+		var pts: Array = c[0]
+		var w: float = c[1]
+		var carry := 20.0
+		var flip := 1.0
 		for i in range(pts.size() - 1):
 			var a: Vector2 = pts[i]
 			var b: Vector2 = pts[i + 1]
-			_add_road(a, b, w)
-			_road_visual(a, b, w)
-	# lamps, trees, buildings
-	var excl: Array = [[Vector2(0, 0), 92.0], [Vector2(-20, 85), 40.0]]
-	for seg in roads:
-		var a: Vector2 = seg[0]
-		var b: Vector2 = seg[1]
-		var w: float = seg[2]
-		var length := a.distance_to(b)
-		var d := (b - a).normalized()
-		var n := Vector2(-d.y, d.x)
-		var mid := (a + b) * 0.5
-		var near_city := mid.length() < 300.0
-		var spacing := 20.0 if near_city else 46.0
-		var lamp_count := int(length / 26.0)
-		for j in range(lamp_count):
-			var p := a + d * ((float(j) + 0.5) * length / maxf(float(lamp_count), 1.0))
-			var lp := p + n * (w * 0.5 + 2.2)
-			if _in_excl(lp, excl):
+			var seg_len := a.distance_to(b)
+			if seg_len < 0.5:
 				continue
-			_lamp(lp, atan2(n.x, n.y))
-			if j % 2 == 0 and near_city:
-				var tp := p - n * (w * 0.5 + 2.7)
-				if not _in_excl(tp, excl):
-					_tree(tp)
-		var slots := int(length / spacing)
-		for j in range(slots):
-			for side_v in [-1.0, 1.0]:
-				var side: float = side_v
-				if rng.randf() < (0.1 if near_city else 0.6):
-					continue
-				var wd := snappedf(rng.randf_range(8.0, 13.0), 0.5)
-				var dp := snappedf(rng.randf_range(9.0, 12.0), 0.5)
-				var center := a + d * (spacing * 0.5 + float(j) * spacing + (length - float(slots) * spacing) * 0.5) + n * side * (w * 0.5 + 4.4 + dp * 0.5)
-				if absf(center.x) > WORLD_HALF.x - 18.0 or absf(center.y) > WORLD_HALF.y - 18.0:
-					continue
-				if _in_excl(center, excl):
-					continue
-				if _hits_road(center, w):
-					continue
-				var bk := _grid_key(center, 20.0)
-				var overlap := false
-				for ddx in range(-1, 2):
-					for ddz in range(-1, 2):
-						var kk := Vector2i(bk.x + ddx, bk.y + ddz)
-						if building_grid.has(kk):
-							for other in building_grid[kk]:
-								var oc: Vector2 = other
-								if absf(oc.x - center.x) < 12.5 and absf(oc.y - center.y) < 12.5:
-									overlap = true
-				if overlap:
-					continue
-				if not building_grid.has(bk):
-					building_grid[bk] = []
-				building_grid[bk].append(center)
-				var toward: Vector2 = -n * side
-				_building(center, atan2(-toward.x, -toward.y), wd, dp, near_city)
-	# Fill sparse neighborhoods without replacing V10's working road, scenery or systems.
-	_add_safe_city_infill()
-	_direction_signs()
-
-# Bounded, batched neighborhood infill. No new physics bodies, audio or UI changes.
-# Keeps the V10 terrain, mountains, day/night, original roads and original buildings.
-func _add_safe_city_infill() -> void:
-	var local_rng := RandomNumberGenerator.new()
-	local_rng.seed = 20311031
-	var placed := 0
-	for gx in range(-19, 20):
-		for gz in range(-13, 14):
-			if placed >= 190:
-				return
-			if local_rng.randf() > 0.33:
-				continue
-			var x := float(gx) * 24.0 + local_rng.randf_range(-3.0, 3.0)
-			var z := float(gz) * 24.0 + local_rng.randf_range(-3.0, 3.0)
-			var point := Vector2(x, z)
-			if point.length() < 140.0 or absf(x) > WORLD_HALF.x - 35.0 or absf(z) > WORLD_HALF.y - 35.0:
-				continue
-			if _hits_road(point, 12.0):
-				continue
-			var grid_key := _grid_key(point, 20.0)
-			var occupied := false
-			for dx in range(-1, 2):
-				for dz in range(-1, 2):
-					var neighbor := Vector2i(grid_key.x + dx, grid_key.y + dz)
-					if building_grid.has(neighbor):
-						for existing in building_grid[neighbor]:
-							if point.distance_to(existing) < 21.0:
-								occupied = true
-								break
-					if occupied:
-						break
-				if occupied:
-					break
-			if occupied:
-				continue
-			var w := local_rng.randf_range(9.0, 14.0)
-			var d := local_rng.randf_range(9.0, 14.0)
-			var h := local_rng.randf_range(10.0, 27.0)
-			var xf := Transform3D(Basis.IDENTITY, Vector3(x, 0, z))
-			var palette := ["c:d9c7a3", "c:e6d8bb", "c:c9b48a", "c:cfbd9e", "c:d8b49a"]
-			var color: String = palette[local_rng.randi_range(0, palette.size() - 1)]
-			_bb(xf, Vector3(0, h * 0.5, 0), Vector3(w, h, d), color)
-			_bb(xf, Vector3(0, h + 0.13, 0), Vector3(w + 0.5, 0.26, d + 0.5), "c:8c8170")
-			for floor_no in range(1, mini(5, int(h / 3.4))):
-				var wy := float(floor_no) * 3.4 + 1.0
-				for side in [-1.0, 1.0]:
-					_bb(xf, Vector3(side * w * 0.24, wy, -d * 0.5 - 0.04), Vector3(1.2, 1.4, 0.08), "win_dark")
-			if not building_grid.has(grid_key):
-				building_grid[grid_key] = []
-			building_grid[grid_key].append(point)
-			placed += 1
-
-func _in_excl(p: Vector2, excl: Array) -> bool:
-	if absf(p.x) < 82.0 and absf(p.y) < 68.0:
-		return true
-	for e in excl:
-		var c: Vector2 = e[0]
-		var r: float = e[1]
-		if p.distance_to(c) < r:
-			return true
-	return false
-
-func _hits_road(center: Vector2, own_w: float) -> bool:
-	var k := _grid_key(center, 24.0)
-	if not road_grid.has(k):
-		return false
-	for idx in road_grid[k]:
-		var seg: Array = roads[idx]
-		var a: Vector2 = seg[0]
-		var b: Vector2 = seg[1]
-		var w: float = seg[2]
-		var q := Geometry2D.get_closest_point_to_segment(center, a, b)
-		if center.distance_to(q) < w * 0.5 + 8.2:
-			return true
-	return false
-
-func _building(center: Vector2, theta: float, wd: float, dp: float, near_city: bool) -> void:
-	var hotel := near_city and rng.randf() < 0.22
-	var h: float
-	if hotel:
-		h = snappedf(rng.randf_range(24.0, 48.0), 3.0)
-	elif near_city:
-		h = snappedf(rng.randf_range(9.0, 22.0), 3.0)
-	else:
-		h = snappedf(rng.randf_range(4.0, 10.0), 3.0)
-	var pos := Vector3(center.x, 0, center.y)
-	var xf := Transform3D(Basis(Vector3.UP, theta), pos)
-	var wall: String = "c:" + str(WALLS[rng.randi_range(0, WALLS.size() - 1)])
-	if hotel:
-		wall = "c:" + ["e8e1d2", "cfd8dc", "d7ccc8", "e0d4b8"][rng.randi_range(0, 3)]
-	_bb(xf, Vector3(0, h * 0.5, 0), Vector3(wd, h, dp), wall)
-	_solid(pos + Vector3(0, h * 0.5, 0), Vector3(wd, h, dp), theta)
-	_bb(xf, Vector3(0, h + 0.17, 0), Vector3(wd + 0.5, 0.35, dp + 0.5), "c:8c8170")
-	_bb(xf, Vector3(0, 1.5, -dp * 0.5 - 0.04), Vector3(wd - 1.6, 2.5, 0.12), "win_lit")
-	var sign_hex: String = SIGN_COLORS[rng.randi_range(0, SIGN_COLORS.size() - 1)]
-	_bb(xf, Vector3(0, 3.35, -dp * 0.5 - 0.12), Vector3(minf(wd - 1.0, 8.0), 1.0, 0.2), "e:" + sign_hex)
-	var floors := int(h / 3.2)
-	for f in range(1, floors):
-		var y := float(f) * 3.2
-		_bb(xf, Vector3(0, y, -dp * 0.5 - 0.1), Vector3(wd + 0.2, 0.12, 0.4), "c:8c8170")
-		for wx in [-wd * 0.28, 0.0, wd * 0.28]:
-			var key := "win_lit" if rng.randf() < 0.6 else "win_dark"
-			_bb(xf, Vector3(wx, y + 1.7, -dp * 0.5 - 0.04), Vector3(1.3, 1.5, 0.1), key)
-	# facade text (only drawn when close)
-	var nm: Array
-	if hotel:
-		nm = HOTELS[rng.randi_range(0, HOTELS.size() - 1)]
-	else:
-		nm = STORES[rng.randi_range(0, STORES.size() - 1)]
-	var lp := xf * Vector3(0, 3.35, -dp * 0.5 - 0.27)
-	_label(self, "%s\n%s" % [nm[0], nm[1]], lp, 0.0085, Color(1, 1, 1), 70.0, theta + PI)
-	# dark alley beside the building: floor strip, bin, no lights
-	if rng.randf() < 0.5:
-		var ap := xf * Vector3(wd * 0.5 + 1.6, 0, 0)
-		var axf := Transform3D(Basis(Vector3.UP, theta), ap)
-		_bb(axf, Vector3(0, 0.01, 0), Vector3(2.6, 0.05, dp + 3.0), "c:1d1f21")
-		if rng.randf() < 0.6:
-			_bb(axf, Vector3(0.6, 0.55, dp * 0.3), Vector3(1.0, 1.1, 1.4), "c:2f5d3a")
-			var bp := axf * Vector3(0.6, 0.55, dp * 0.3)
-			_solid(bp, Vector3(1.0, 1.1, 1.4), theta)
+			var d := (b - a) / seg_len
+			var nrm := Vector2(-d.y, d.x)
+			var t := carry
+			while t < seg_len:
+				spots.append([a + d * t + nrm * flip * (w * 0.5 + 3.0), atan2(nrm.x * flip, nrm.y * flip)])
+				flip = -flip
+				t += 42.0
+			carry = t - seg_len
+	spots.sort_custom(func(x, y): return (x[0] as Vector2).distance_squared_to(start_pos) < (y[0] as Vector2).distance_squared_to(start_pos))
+	var count := mini(spots.size(), 800)
+	for i in range(count):
+		_lamp(spots[i][0], float(spots[i][1]))
 
 func _lamp(p: Vector2, face: float) -> void:
 	var xf := Transform3D(Basis(Vector3.UP, face), Vector3(p.x, 0, p.y))
@@ -576,6 +815,8 @@ func _tree(p: Vector2) -> void:
 			var b := Basis(Vector3.UP, a) * Basis(Vector3.RIGHT, 0.45)
 			var fr := Transform3D(b, pos + Vector3(0, hgt, 0) + Vector3(cos(a), 0, sin(a)) * 0.9)
 			_batch_mesh(_bm(Vector3(0.7, 0.08, 3.4)), fr, "c:3c7a36")
+			var b2 := Basis(Vector3.UP, a + 0.4) * Basis(Vector3.RIGHT, 0.95)
+			_batch_mesh(_bm(Vector3(0.6, 0.07, 2.6)), Transform3D(b2, pos + Vector3(0, hgt - 0.5, 0) + Vector3(cos(a + 0.4), 0, sin(a + 0.4)) * 0.6), "c:4c8c3e")
 	else:
 		_wb(pos + Vector3(0, 1.6, 0), Vector3(0.38, 3.2, 0.38), "c:57391f")
 		var sm := SphereMesh.new()
@@ -585,88 +826,63 @@ func _tree(p: Vector2) -> void:
 		sm.rings = 4
 		var leaf: String = ["c:2f6b34", "c:3b7a3a", "c:4f8a3f"][rng.randi_range(0, 2)]
 		_batch_mesh(sm, Transform3D(Basis.IDENTITY, pos + Vector3(0, 4.2, 0)), leaf)
+		_batch_mesh(sm, Transform3D(Basis.IDENTITY, pos + Vector3(1.1, 3.7, 0.5)), leaf)
+		_batch_mesh(sm, Transform3D(Basis.IDENTITY, pos + Vector3(-0.9, 3.9, -0.7)), leaf)
 	_solid(pos + Vector3(0, 1.5, 0), Vector3(0.5, 3.0, 0.5))
-
-func _direction_signs() -> void:
-	var count := 0
-	for road in MapData.ROADS:
-		var pts: Array = road[1]
-		if pts.size() < 3:
-			continue
-		var p: Vector2 = pts[1]
-		var w: float = road[0]
-		var best := _nearest_districts(p)
-		var q := p + Vector2(w * 0.5 + 3.4, 0)
-		var pos := Vector3(q.x, 0, q.y)
-		_wb(pos + Vector3(0, 2.6, 0), Vector3(0.2, 5.2, 0.2), "c:555b5f")
-		_wb(pos + Vector3(0, 5.2, 0), Vector3(5.6, 1.7, 0.15), "c:0b6b3a")
-		_wb(pos + Vector3(0, 5.2, 0), Vector3(5.8, 1.9, 0.1), "c:f2f2f2")
-		_wb(pos + Vector3(0, 5.2, 0.02), Vector3(5.6, 1.7, 0.15), "c:0b6b3a")
-		var text := "%s  %s\n%s  %s" % [best[0][0], best[0][1], best[1][0], best[1][1]]
-		_label(self, text, pos + Vector3(0, 5.2, 0.12), 0.0105, Color.WHITE, 90.0, 0.0)
-		_label(self, text, pos + Vector3(0, 5.2, -0.12), 0.0105, Color.WHITE, 90.0, PI)
-		_solid(pos + Vector3(0, 2.6, 0), Vector3(0.4, 5.2, 0.4))
-		count += 1
 
 func _nearest_districts(p: Vector2) -> Array:
 	var list: Array = []
-	for dd in MapData.DISTRICTS:
-		var pos: Vector2 = dd[2]
-		list.append([p.distance_to(pos), dd[0], dd[1]])
+	for dd in districts:
+		list.append([p.distance_to(Vector2(float(dd[2]), float(dd[3]))), dd[0], dd[1]])
+	if list.is_empty():
+		return [["Makkah", "مكة"], ["Makkah", "مكة"]]
 	list.sort_custom(func(x, y): return x[0] < y[0])
-	return [[list[0][1], list[0][2]], [list[1][1], list[1][2]]]
+	return [[list[0][1], list[0][2]], [list[mini(1, list.size() - 1)][1], list[mini(1, list.size() - 1)][2]]]
 
 func _district_at(p: Vector2) -> Array:
 	return _nearest_districts(p)[0]
 
-# ---------------------------------------------------------------- Al Haram + clock tower
+# ---------------------------------------------------------------- Al Haram: clock faces + pilgrims around the Kaaba
+var pilgrims: Array = []
+
 func _create_haram() -> void:
-	_wb(Vector3(0, 0.03, 0), Vector3(160, 0.06, 130), "c:e8e2d2")
-	_wb(Vector3(0, 7.0, 0), Vector3(84, 14, 64), "c:e9dfc6")
-	_wb(Vector3(0, 14.3, 0), Vector3(86, 0.6, 66), "c:b8ad96")
-	_solid(Vector3(0, 7.0, 0), Vector3(84, 14, 64))
-	var sm := SphereMesh.new()
-	sm.radius = 9.0
-	sm.height = 18.0
-	sm.radial_segments = 16
-	sm.rings = 8
-	_batch_mesh(sm, Transform3D(Basis.IDENTITY, Vector3(0, 14.5, 0)), "c:d9d4c6")
-	for sx in [-20.0, 20.0]:
-		_batch_mesh(sm, Transform3D(Basis.IDENTITY.scaled(Vector3(0.6, 0.6, 0.6)), Vector3(sx, 14.5, 0)), "c:d9d4c6")
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = 1.4
-	cyl.bottom_radius = 1.9
-	cyl.height = 56.0
-	cyl.radial_segments = 10
-	var tip := SphereMesh.new()
-	tip.radius = 1.6
-	tip.height = 3.2
-	tip.radial_segments = 8
-	tip.rings = 4
-	for cx in [-44.0, 44.0]:
-		for cz in [-34.0, 34.0]:
-			_batch_mesh(cyl, Transform3D(Basis.IDENTITY, Vector3(cx, 28.0, cz)), "c:efe7d3")
-			_batch_mesh(tip, Transform3D(Basis.IDENTITY, Vector3(cx, 57.0, cz)), "c:d4a53a")
-			_solid(Vector3(cx, 28.0, cz), Vector3(3.6, 56.0, 3.6))
-	_label(self, "Al Masjid Al Haram\nالمسجد الحرام", Vector3(0, 11.0, -32.4), 0.03, Color(0.15, 0.12, 0.05), 400.0, PI)
-	_label(self, "Al Masjid Al Haram\nالمسجد الحرام", Vector3(0, 11.0, 32.4), 0.03, Color(0.15, 0.12, 0.05), 400.0, 0.0)
-	# Clock tower
-	var tp := Vector3(-20, 0, 85)
-	_wb(tp + Vector3(0, 8, 0), Vector3(30, 16, 30), "c:cdbf9f")
-	_wb(tp + Vector3(0, 60, 0), Vector3(16, 120, 16), "c:d8cdb2")
-	_solid(tp + Vector3(0, 60, 0), Vector3(30, 120, 30))
-	_wb(tp + Vector3(0, 104, 0), Vector3(24, 24, 24), "c:e6e0cf")
-	_wb(tp + Vector3(0, 125, 0), Vector3(14, 14, 14), "c:cdbf9f")
-	_wb(tp + Vector3(0, 142, 0), Vector3(2.0, 22, 2.0), "c:d4a53a")
-	for face in range(4):
-		var ang := float(face) * PI * 0.5
-		var fx := Transform3D(Basis(Vector3.UP, ang), tp + Vector3(0, 104, 0))
-		_bb(fx, Vector3(0, 0, -12.2), Vector3(17, 17, 0.4), "c:f8f8f4")
-		_bb(fx, Vector3(0, 2.4, -12.5), Vector3(0.5, 5.0, 0.3), "c:202020")
-		_bb(fx, Vector3(1.6, 0, -12.5), Vector3(3.4, 0.5, 0.3), "c:202020")
-	_label(self, "Abraj Al Bait\nأبراج البيت", tp + Vector3(0, 15, -15.2), 0.03, Color.WHITE, 300.0, PI)
-	# parking sign
-	_label(self, "Haram Parking  مواقف الحرم   P", Vector3(95, 4, 0), 0.02, Color(0.4, 0.7, 1.0), 150.0, -PI * 0.5)
+	var clock = city.get("clock")
+	if clock != null:
+		var cx := float(clock[0])
+		var cz := float(clock[1])
+		var hw := float(clock[2])
+		var hd := float(clock[3])
+		var faces := [[0.0, -hd - 0.6, 0.0], [0.0, hd + 0.6, PI], [-hw - 0.6, 0.0, PI * 0.5], [hw + 0.6, 0.0, -PI * 0.5]]
+		for f in faces:
+			var xf := Transform3D(Basis(Vector3.UP, float(f[2])), Vector3(cx + float(f[0]), 395.0, cz + float(f[1])))
+			_bb(xf, Vector3.ZERO, Vector3(43, 43, 1.0), "c:f8f8f4#sky")
+			_bb(xf, Vector3(0, 5.5, -0.7), Vector3(1.8, 12.0, 0.3), "c:202020#sky")
+			_bb(xf, Vector3(6.0, 0, -0.7), Vector3(13.0, 1.4, 0.3), "c:202020#sky")
+			_bb(xf, Vector3(0, 0, -0.7), Vector3(3.0, 3.0, 0.3), "c:d4a53a#sky")
+	for i in range(30):
+		var o := _random_outfit()
+		o["top"] = 0
+		o["head"] = 0
+		o["glasses"] = 0
+		var node := Node3D.new()
+		add_child(node)
+		var vis := _human(node, false, o)
+		node.set_meta("visual", vis)
+		var r := rng.randf_range(22.0, 44.0)
+		var ang := rng.randf() * TAU
+		node.position = Vector3(cos(ang) * r, 0.05, sin(ang) * r)
+		pilgrims.append([node, r, ang, rng.randf_range(0.8, 1.1), rng.randf() * 6.0])
+
+func _update_pilgrims(delta: float) -> void:
+	for p in pilgrims:
+		var node: Node3D = p[0]
+		var r: float = p[1]
+		var ang: float = float(p[2]) + delta * float(p[3]) / r
+		p[2] = ang
+		p[4] = float(p[4]) + delta * 6.0
+		node.position = Vector3(cos(ang) * r, 0.05, sin(ang) * r)
+		node.rotation.y = atan2(sin(ang), -cos(ang))
+		_animate_walker(node.get_meta("visual"), float(p[4]), true)
 
 # ---------------------------------------------------------------- people
 const TOPS := [["White thobe", "f4f1e8", 0], ["Black thobe", "1d1f24", 0], ["Cream thobe", "d9c9a0", 0], ["Blue shirt", "3a6ea5", 1], ["Red shirt", "b03a2e", 1], ["Green jacket", "3e6b4a", 1]]
@@ -676,7 +892,7 @@ const HEADS := [["No head wear", ""], ["White ghutra", "f6f6f2"], ["Red ghutra",
 const GLASSES := [["No glasses", false], ["Sunglasses", true]]
 
 func _pm(spec: String) -> StandardMaterial3D:
-	if spec.begins_with("e:") or spec.begins_with("flash") or spec.begins_with("win"):
+	if spec.begins_with("p:") or spec.begins_with("e:") or spec.begins_with("flash") or spec.begins_with("win"):
 		return _get_mat(spec)
 	return _get_mat("c:" + spec)
 
@@ -830,7 +1046,10 @@ func _actor(pos: Vector3, o: Dictionary, is_child: bool) -> CharacterBody3D:
 	return body
 
 func _create_player() -> void:
-	player = _actor(Vector3(MapData.START_POS.x, 0.05, MapData.START_POS.y), outfit, true)
+	var perp := Vector2(-start_dir.y, start_dir.x)
+	var pp := start_pos + perp * 2.4
+	player = _actor(Vector3(pp.x, 0.05, pp.y), outfit, true)
+	yaw = atan2(-start_dir.x, -start_dir.y)
 	player_visual = player.get_meta("visual")
 
 func _rebuild_player_visual() -> void:
@@ -841,10 +1060,16 @@ func _rebuild_player_visual() -> void:
 
 func _create_npcs() -> void:
 	var people_stream := _loop_wav("res://audio/people.wav")
+	for sg in roads:
+		var sa: Vector2 = sg[0]
+		if sa.distance_to(start_pos) < 450.0 and float(sg[2]) >= 6.0:
+			npc_roads.append(sg)
+	if npc_roads.is_empty():
+		return
 	var n_npc := 44
 	for i in range(n_npc):
-		var si := rng.randi_range(0, roads.size() - 1)
-		var seg: Array = roads[si]
+		var si := rng.randi_range(0, npc_roads.size() - 1)
+		var seg: Array = npc_roads[si]
 		var t := rng.randf()
 		var side := 1.0 if rng.randf() < 0.5 else -1.0
 		var p := _sidewalk_point(seg, t, side)
@@ -877,7 +1102,7 @@ func _sidewalk_point(seg: Array, t: float, side: float) -> Vector2:
 func _update_npcs(delta: float) -> void:
 	for i in range(npc_list.size()):
 		var npc: CharacterBody3D = npc_list[i]
-		var seg: Array = roads[npc_seg[i]]
+		var seg: Array = npc_roads[npc_seg[i]]
 		var a: Vector2 = seg[0]
 		var b: Vector2 = seg[1]
 		var length := a.distance_to(b)
@@ -891,10 +1116,10 @@ func _update_npcs(delta: float) -> void:
 				# at a road end: switch to a nearby road or turn around
 				var end_pt := a if t_target <= 0.001 else b
 				var found := -1
-				for k in range(roads.size()):
+				for k in range(npc_roads.size()):
 					if k == npc_seg[i]:
 						continue
-					var s2: Array = roads[k]
+					var s2: Array = npc_roads[k]
 					var a2: Vector2 = s2[0]
 					var b2: Vector2 = s2[1]
 					if a2.distance_to(end_pt) < 2.0:
@@ -1001,13 +1226,13 @@ func _vehicle_model(parent: Node3D, color_hex: String, kind: int, make_idx: int)
 		6:
 			L = 3.7; body_h = 0.55; cab_len = 2.1; cab_h = 0.55
 	var chassis_z := 0.0
-	_bxm(parent, Vector3(0, base, chassis_z), Vector3(W, body_h, L), color_hex)
+	_bxm(parent, Vector3(0, base, chassis_z), Vector3(W, body_h, L), "p:" + color_hex)
 	var glass := "26414f"
 	var cab_hex := glass
 	if kind == 4 or kind == 3:
 		cab_hex = "2b4a5a"
 	_bxm(parent, Vector3(0, base + body_h * 0.5 + cab_h * 0.5, cab_z), Vector3(W - 0.22, cab_h, cab_len), cab_hex)
-	_bxm(parent, Vector3(0, base + body_h * 0.5 + cab_h + 0.04, cab_z), Vector3(W - 0.3, 0.08, cab_len - 0.2), color_hex)
+	_bxm(parent, Vector3(0, base + body_h * 0.5 + cab_h + 0.04, cab_z), Vector3(W - 0.3, 0.08, cab_len - 0.2), "p:" + color_hex)
 	if kind == 5:
 		_bxm(parent, Vector3(0, base + 1.0, 1.4), Vector3(W, 2.0, 3.6), "d8d8d2")
 	if kind == 2:
@@ -1018,6 +1243,14 @@ func _vehicle_model(parent: Node3D, color_hex: String, kind: int, make_idx: int)
 	for x in [-W * 0.36, W * 0.36]:
 		_bxm(parent, Vector3(x, base + 0.05, front_z), Vector3(0.42, 0.2, 0.08), "e:fff4c2")
 		_bxm(parent, Vector3(x, base + 0.05, rear_z), Vector3(0.4, 0.18, 0.08), "e:e01b12")
+	# mirrors, door seams, roof rails
+	for mx in [-1.0, 1.0]:
+		_bxm(parent, Vector3(mx * (W * 0.5 + 0.08), base + body_h * 0.5 + 0.12, cab_z - cab_len * 0.42), Vector3(0.14, 0.12, 0.22), "p:" + color_hex)
+		for dz in [-0.45, 0.45]:
+			_bxm(parent, Vector3(mx * (W * 0.5 + 0.005), base + 0.05, cab_z + dz * cab_len * 0.5), Vector3(0.02, body_h * 0.85, 0.03), "101214")
+	if kind == 1 or kind == 3:
+		for rx in [-0.65, 0.65]:
+			_bxm(parent, Vector3(rx, base + body_h * 0.5 + cab_h + 0.14, cab_z), Vector3(0.05, 0.05, cab_len * 0.8), "2a2d30")
 	# grille, bumpers, plate
 	_bxm(parent, Vector3(0, base - 0.12, front_z - 0.02), Vector3(W * 0.5, 0.22, 0.06), "15171a")
 	_bxm(parent, Vector3(0, base - 0.30, front_z), Vector3(W + 0.02, 0.2, 0.14), "1c1e21")
@@ -1088,7 +1321,11 @@ func _make_vehicle(pos: Vector3, heading: float, color_hex: String, kind: int, m
 	return v
 
 func _create_car() -> void:
-	car = _make_vehicle(Vector3(MapData.START_POS.x + 5.0, 0.08, MapData.START_POS.y + 2.0), 0.0, "eeeeea", 0, 0)
+	var cperp := Vector2(-start_dir.y, start_dir.x)
+	var cp := start_pos - cperp * 2.4 + start_dir * 3.0
+	var cheading := atan2(-start_dir.x, -start_dir.y)
+	car = _make_vehicle(Vector3(cp.x, 0.08, cp.y), cheading, "eeeeea", 0, 0)
+	car_heading = cheading
 	car.collision_layer = 1
 	car.collision_mask = 3
 	all_cars.append(car)
@@ -1111,27 +1348,44 @@ func _add_engine_sound(v: Node3D) -> void:
 
 func _build_routes() -> Array:
 	var routes: Array = []
-	for road in MapData.ROADS:
-		var pts: Array = road[1]
+	for r in city["roads"]:
+		var cls := int(r[1])
+		if cls > 4:
+			continue
+		var pts: Array = _v2list(r[2])
 		if pts.size() < 2:
 			continue
-		var r: Array = []
+		var length := 0.0
+		for i in range(pts.size() - 1):
+			length += (pts[i] as Vector2).distance_to(pts[i + 1])
+		var near := false
 		for p in pts:
-			r.append(p)
+			if (p as Vector2).distance_to(start_pos) < 900.0:
+				near = true
+				break
+		if not near or length < 90.0:
+			continue
+		var route: Array = pts.duplicate()
 		var closed: bool = (pts[0] as Vector2).distance_to(pts[pts.size() - 1]) < 1.0
 		if not closed:
-			# out and back, so the car turns around at the end
 			for k in range(pts.size() - 2, -1, -1):
-				r.append(pts[k])
-		routes.append(r)
+				route.append(pts[k])
+		routes.append(route)
 	return routes
 
 func _create_traffic() -> void:
 	var routes := _build_routes()
+	if routes.is_empty():
+		return
 	var kinds := [0, 1, 0, 6, 2, 1, 3, 0, 7, 8, 1, 4, 0, 5, 6, 7, 1, 0, 8, 2, 0, 3, 1, 6, 0, 4, 7, 1, 0, 5, 8, 0, 6, 1, 3, 0]
 	for i in range(kinds.size()):
-		var route: Array = routes[i % routes.size()]
+		var route: Array = routes[rng.randi_range(0, routes.size() - 1)]
 		var seg := rng.randi_range(0, route.size() - 2)
+		for tries in range(12):
+			var cand: Vector2 = route[seg]
+			if cand.distance_to(start_pos) < 800.0:
+				break
+			seg = rng.randi_range(0, route.size() - 2)
 		var a: Vector2 = route[seg]
 		var b: Vector2 = route[seg + 1]
 		var t := 0.2 + rng.randf() * 0.6
@@ -1440,29 +1694,37 @@ func _create_ui() -> void:
 	minimap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui_root.add_child(minimap)
 	minimap.set("roads", roads)
-	# full map
+	minimap.set("road_cells", road_cells)
+	# full map (real OpenStreetMap roads)
 	full_map = Control.new()
 	full_map.set_script(load("res://fullmap.gd"))
 	full_map.position = Vector2(150, 70)
 	full_map.size = Vector2(700, 436)
 	full_map.visible = false
 	ui_root.add_child(full_map)
-	for dd in MapData.DISTRICTS:
-		var pos: Vector2 = dd[2]
-		var pp := pos / MapData.MAP_SCALE + MapData.MAP_CENTER_PX
-		pp = pp / MapData.MAP_SIZE_PX * full_map.size
+	var map_lines: Array = []
+	for r in city["roads"]:
+		if int(r[1]) <= 3:
+			map_lines.append([int(r[1]), _v2list(r[2])])
+	full_map.set("lines", map_lines)
+	full_map.set("world_min", world_min)
+	full_map.set("world_max", world_max)
+	var msc: float = minf(full_map.size.x / (world_max.x - world_min.x), full_map.size.y / (world_max.y - world_min.y))
+	var moff := (full_map.size - (world_max - world_min) * msc) * 0.5
+	for dd in districts:
+		var pp := (Vector2(float(dd[2]), float(dd[3])) - world_min) * msc + moff
 		var box := Label.new()
 		box.text = "%s\n%s" % [dd[0], dd[1]]
-		box.add_theme_font_size_override("font_size", 12)
+		box.add_theme_font_size_override("font_size", 11)
 		box.add_theme_color_override("font_color", Color.WHITE)
 		box.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		var st := StyleBoxFlat.new()
-		st.bg_color = Color(0.05, 0.06, 0.08, 0.88)
+		st.bg_color = Color(0.05, 0.06, 0.08, 0.85)
 		st.set_corner_radius_all(4)
-		st.content_margin_left = 6
-		st.content_margin_right = 6
+		st.content_margin_left = 5
+		st.content_margin_right = 5
 		box.add_theme_stylebox_override("normal", st)
-		box.position = pp - Vector2(40, 16)
+		box.position = pp - Vector2(34, 14)
 		full_map.add_child(box)
 	var bottom := ColorRect.new()
 	bottom.position = Vector2(140, 520)
@@ -1647,6 +1909,15 @@ func _update_time(delta: float) -> void:
 	var sky := Color(0.03, 0.05, 0.11).lerp(Color(0.65, 0.79, 0.91), daylight)
 	sky = sky.lerp(Color(0.95, 0.52, 0.30), dusk * 0.45)
 	city_environment.background_color = sky
+	var top_c := Color(0.02, 0.04, 0.10).lerp(Color(0.22, 0.47, 0.83), daylight)
+	var hor_c := Color(0.05, 0.08, 0.15).lerp(Color(0.74, 0.85, 0.95), daylight)
+	hor_c = hor_c.lerp(Color(1.0, 0.56, 0.30), dusk * 0.55)
+	top_c = top_c.lerp(Color(0.45, 0.40, 0.62), dusk * 0.25)
+	sky_mat.sky_top_color = top_c
+	sky_mat.sky_horizon_color = hor_c
+	sky_mat.ground_horizon_color = hor_c
+	sky_mat.ground_bottom_color = Color(0.20, 0.17, 0.12).lerp(Color(0.50, 0.44, 0.33), daylight)
+	city_environment.glow_intensity = 0.15 + night_factor * 0.7
 	city_environment.fog_light_color = sky
 	city_environment.ambient_light_color = Color(0.30, 0.36, 0.55).lerp(Color(0.85, 0.83, 0.76), daylight)
 	city_environment.ambient_light_energy = 0.30 + daylight * 0.55
@@ -1656,9 +1927,9 @@ func _update_time(delta: float) -> void:
 	cloud_mat.albedo_color = Color(0.25 + 0.75 * daylight, 0.27 + 0.73 * daylight, 0.35 + 0.65 * daylight, 0.92)
 	for cloud in cloud_nodes:
 		var c: Node3D = cloud
-		c.position.x += delta * 2.5
-		if c.position.x > 700.0:
-			c.position.x = -700.0
+		c.position.x += delta * 3.0
+		if c.position.x > world_max.x + 600.0:
+			c.position.x = world_min.x - 600.0
 	# headlights
 	for s in headlight_pair:
 		(s as SpotLight3D).light_energy = (3.0 * night_factor) if driving else 0.0
@@ -1684,6 +1955,7 @@ func _physics_process(delta: float) -> void:
 	_update_time(delta)
 	_advance_traffic(delta)
 	_update_npcs(delta)
+	_update_pilgrims(delta)
 	if wardrobe_open:
 		_wardrobe_camera(delta)
 		_update_hud()
@@ -1773,8 +2045,8 @@ func _update_camera() -> void:
 func _place_sky() -> void:
 	var sd: Vector3 = get_meta("sun_dir")
 	var md: Vector3 = get_meta("moon_dir")
-	sun_mesh.position = camera.position + sd * 700.0
-	moon_mesh.position = camera.position + md * 700.0
+	sun_mesh.position = camera.position + sd * 5500.0
+	moon_mesh.position = camera.position + md * 5500.0
 
 func _wardrobe_camera(delta: float) -> void:
 	wardrobe_spin += delta * 0.6
@@ -1795,9 +2067,12 @@ func _update_hud() -> void:
 	minimap.set("player_xy", Vector2(focus.x, focus.z))
 	minimap.queue_redraw()
 	if map_open:
-		full_map.set("player_xy", Vector2(focus.x, focus.z))
-		full_map.set("heading", car_heading if driving else yaw)
-		full_map.queue_redraw()
+		map_redraw_timer -= get_physics_process_delta_time()
+		if map_redraw_timer <= 0.0:
+			map_redraw_timer = 0.25
+			full_map.set("player_xy", Vector2(focus.x, focus.z))
+			full_map.set("heading", car_heading if driving else yaw)
+			full_map.queue_redraw()
 
 # ---------------------------------------------------------------- cars: enter / exit
 func _enter_nearest_car(police_only: bool = false) -> void:
