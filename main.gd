@@ -99,7 +99,8 @@ func _ready() -> void:
 	rng.seed = 4261
 	_load_city()
 	_create_world()
-	_create_roads_and_city()
+	# Yield across frames while constructing the large OSM city on Android TV.
+	await _create_roads_and_city()
 	_create_haram()
 	_create_player()
 	_create_car()
@@ -114,7 +115,7 @@ func _ready() -> void:
 	camera.near = 0.4
 	camera.far = 6000.0
 	add_child(camera)
-	_flush_batches()
+	await _flush_batches()
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 
 # ---------------------------------------------------------------- materials
@@ -228,6 +229,7 @@ func _wb(pos: Vector3, size: Vector3, mat_key: String) -> void:
 	_batch_mesh(_bm(size), Transform3D(Basis.IDENTITY, pos), mat_key)
 
 func _flush_batches() -> void:
+	var committed := 0
 	for key in batches.keys():
 		var st: SurfaceTool = batches[key]
 		var mi := MeshInstance3D.new()
@@ -241,6 +243,9 @@ func _flush_batches() -> void:
 		mi.visibility_range_end = vis
 		mi.visibility_range_end_margin = 60.0
 		add_child(mi)
+		committed += 1
+		if committed % 12 == 0:
+			await get_tree().process_frame
 	batches.clear()
 
 func _solid(pos: Vector3, size: Vector3, yaw_rot: float = 0.0) -> void:
@@ -297,7 +302,8 @@ func _create_world() -> void:
 	we.environment = env
 	add_child(we)
 	sun_light = DirectionalLight3D.new()
-	sun_light.shadow_enabled = true
+	# Reduce GPU pressure on Android TV without altering world geometry.
+	sun_light.shadow_enabled = not OS.has_feature("mobile")
 	sun_light.directional_shadow_max_distance = 140.0
 	add_child(sun_light)
 	moon_light = DirectionalLight3D.new()
@@ -545,7 +551,11 @@ func _poly_area(p: Array) -> float:
 
 func _create_roads_and_city() -> void:
 	var lamp_candidates: Array = []
+	var processed := 0
 	for r in city["roads"]:
+		processed += 1
+		if processed % 32 == 0:
+			await get_tree().process_frame
 		var w: float = float(r[0])
 		var cls: int = int(r[1])
 		var pts: Array = _v2list(r[2])
@@ -564,8 +574,12 @@ func _create_roads_and_city() -> void:
 			lamp_candidates.append([pts, w])
 	for a in city["areas"]:
 		_city_area(a)
+	processed = 0
 	for b in city["bld"]:
 		_city_building(b)
+		processed += 1
+		if processed % 32 == 0:
+			await get_tree().process_frame
 	_place_lamps(lamp_candidates)
 	for t in city["trees"]:
 		_tree(Vector2(float(t[0]), float(t[1])))
