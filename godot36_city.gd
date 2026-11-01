@@ -46,6 +46,20 @@ func block(parent, at, size, color):
     obj.translation = at
     return obj
 
+func vehicle_visual(parent, paint):
+    block(parent,Vector3(0,0.65,0),Vector3(2.1,0.65,4.1),paint)
+    block(parent,Vector3(0,1.17,-0.25),Vector3(1.76,0.68,2.12),"#253744")
+    block(parent,Vector3(0,1.53,-0.25),Vector3(1.65,0.08,1.95),paint)
+    for side in [-1,1]:
+        for z in [-1.35,1.35]:
+            var wheel = block(parent,Vector3(side*1.08,0.34,z),Vector3(0.24,0.68,0.68),"#17191b")
+            block(parent,Vector3(side*1.22,0.34,z),Vector3(0.04,0.28,0.28),"#b8bec1")
+        block(parent,Vector3(side*0.79,1.2,-0.25),Vector3(0.07,0.42,1.45),"#171f29")
+        block(parent,Vector3(side*0.68,0.7,-2.08),Vector3(0.35,0.18,0.06),"#fff5d6")
+        block(parent,Vector3(side*0.68,0.7,2.08),Vector3(0.35,0.18,0.06),"#c22625")
+    block(parent,Vector3(0,0.42,-2.09),Vector3(1.65,0.18,0.07),"#c4c9cc")
+    block(parent,Vector3(0,0.42,2.09),Vector3(1.65,0.18,0.07),"#c4c9cc")
+
 func _ready():
     var file = File.new()
     if file.open("res://city.json",File.READ) == OK:
@@ -106,8 +120,7 @@ func _ready():
     block(self,kp+Vector3(0,10,0),Vector3(13.2,1.2,12.2),"#c5a354")
     car = Spatial.new()
     add_child(car)
-    block(car,Vector3(0,0.6,0),Vector3(2.2,0.8,4.2),"#d9322c")
-    block(car,Vector3(0,1.2,0),Vector3(1.8,0.65,2.2),"#263b49")
+    vehicle_visual(car,"#d9322c")
     walker = Spatial.new()
     add_child(walker)
     player_torso = block(walker,Vector3(0,1,0),Vector3(0.65,1.25,0.4),"#f0f0e9")
@@ -115,8 +128,7 @@ func _ready():
     for i in range(12):
         var npc = Spatial.new()
         add_child(npc)
-        block(npc,Vector3(0,0.6,0),Vector3(2,0.7,3.8),"#3d526b" if i%3==0 else "#ddddda")
-        block(npc,Vector3(0,1.15,0),Vector3(1.6,0.6,1.8),"#283843")
+        vehicle_visual(npc,"#3d526b" if i%3==0 else "#ddddda")
         if road_routes.size()>0:
             traffic.append({"node":npc,"route":road_routes[(i*7)%road_routes.size()],"segment":0,"progress":float(i%5)*0.1,"speed":7.0+float(i%4)*2.0})
     for i in range(20):
@@ -173,9 +185,9 @@ func _process(dt):
         driving = not driving
         speed = 0
     heading += steer*dt*(1.1 if driving else 2.2)
-    player_pos += Vector3(sin(heading),0,-cos(heading))*speed*dt
     if not driving:
         speed = clamp(speed,-4,6)
+    player_pos += Vector3(sin(heading),0,-cos(heading))*speed*dt
     car.visible = driving
     walker.visible = not driving
     walker.translation = player_pos
