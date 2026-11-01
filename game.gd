@@ -204,6 +204,4 @@ func _process(dt):
     var height=8.0 if camera_mode==0 else (4.0 if camera_mode==1 else 2.5)
     camera.translation=pos+Vector3(-sin(heading)*distance,height,cos(heading)*distance)
     camera.look_at(pos+Vector3(0,1,0),Vector3.UP)
-    hud.text="CITY FREEDOM MAKKAH | V11 REALMAP GLES2 COMPATIBILITY
-D-PAD MOVE | OK WALK/DRIVE | BACK CAMERA
-"+str(int(abs(velocity)*3.6))+" km/h | "+str(int(time_of_day))+":00"
+    hud.text="CITY FREEDOM MAKKAH | V11 REALMAP GLES2 COMPATIBILITY\nD-PAD MOVE | OK WALK/DRIVE | BACK CAMERA\n"+str(int(abs(velocity)*3.6))+" km/h | "+str(int(time_of_day))+":00"
