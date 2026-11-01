@@ -16,6 +16,12 @@ var traffic = []
 var time_of_day = 10.0
 var materials = {}
 var camera_mode = 0
+var pedestrians = []
+var city_audio = null
+var horn_audio = null
+var outfit_index = 0
+var outfit_colors = ["#e9e7df", "#3b4659", "#9b8d7d", "#ffffff"]
+var player_body = null
 
 func mat(color):
     if materials.has(color): return materials[color]
@@ -147,7 +153,7 @@ func _ready():
     vehicle(car,"#d62f30")
     walker=Spatial.new()
     add_child(walker)
-    box(walker,Vector3(0,1.1,0),Vector3(0.65,1.3,0.45),"#e9e7df")
+    player_body=box(walker,Vector3(0,1.1,0),Vector3(0.65,1.3,0.45),"#e9e7df")
     box(walker,Vector3(0,1.92,0),Vector3(0.43,0.43,0.43),"#a87b60")
     for i in range(10):
         if routes.empty(): break
@@ -155,6 +161,21 @@ func _ready():
         add_child(n)
         vehicle(n,"#c5c5c2" if i%2==0 else "#445e79")
         traffic.append({"node":n,"route":routes[(i*7)%routes.size()],"seg":0,"fraction":float(i%4)*0.2,"speed":7.0+float(i%3)*2.0})
+    for i in range(24):
+        var ped=Spatial.new()
+        add_child(ped)
+        box(ped,Vector3(0,0.95,0),Vector3(0.45,1.4,0.35),"#e9e6dc" if i%3==0 else "#766b63")
+        box(ped,Vector3(0,1.85,0),Vector3(0.38,0.38,0.38),"#b28b6c")
+        var ang=float(i)*2.39996
+        var rad=25.0+float(i%9)*18.0
+        pedestrians.append({"node":ped,"origin":pos+Vector3(cos(ang)*rad,0,sin(ang)*rad),"phase":float(i)*0.6})
+    city_audio=AudioStreamPlayer.new()
+    add_child(city_audio)
+    city_audio.stream=load("res://audio/city.wav")
+    if city_audio.stream!=null: city_audio.play()
+    horn_audio=AudioStreamPlayer.new()
+    add_child(horn_audio)
+    horn_audio.stream=load("res://audio/horn.wav")
     camera=Camera.new()
     camera.current=true
     camera.far=1600
@@ -164,6 +185,13 @@ func _ready():
     hud=Label.new()
     hud.rect_position=Vector2(20,20)
     layer.add_child(hud)
+
+func _unhandled_input(event):
+    if event is InputEventKey and event.pressed and not event.echo:
+        if event.scancode==KEY_H and horn_audio!=null and horn_audio.stream!=null: horn_audio.play()
+        if event.scancode==KEY_W and player_body!=null:
+            outfit_index=(outfit_index+1)%outfit_colors.size()
+            player_body.material_override=mat(outfit_colors[outfit_index])
 
 func _process(dt):
     var steer=int(Input.is_action_pressed("ui_right"))-int(Input.is_action_pressed("ui_left"))
@@ -197,6 +225,10 @@ func _process(dt):
             b=route[seg+1]
         item["node"].translation=a.linear_interpolate(b,float(item["fraction"]))
         item["node"].rotation.y=atan2(b.x-a.x,b.z-a.z)
+    for ped in pedestrians:
+        ped["phase"]+=dt*0.42
+        ped["node"].translation=ped["origin"]+Vector3(cos(ped["phase"])*4.0,0,sin(ped["phase"])*4.0)
+        ped["node"].rotation.y=-ped["phase"]
     time_of_day=fmod(time_of_day+dt*0.01,24.0)
     sun.rotation_degrees.x=-65.0*sin(time_of_day*PI/12.0)
     sun.light_energy=0.85 if time_of_day>6.0 and time_of_day<18.0 else 0.16
