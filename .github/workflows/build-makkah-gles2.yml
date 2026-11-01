@@ -53,6 +53,8 @@ jobs:
           EOF
           cp gles2_game.gd gles2-test/game.gd
           cp data/city.json gles2-test/city.json
+          test -s gles2-test/city.json
+          echo "Bundling Makkah road and building data"
           cat > gles2-test/export_presets.cfg <<'EOF'
           [preset.0]
 
