@@ -50,8 +50,10 @@ jobs:
           script = ExtResource( 1 )
           EOF
           cp game.gd gles2-test/game.gd
-          cp data/city.json gles2-test/city.json
-          test -s gles2-test/city.json
+          mkdir -p gles2-test/data gles2-test/audio
+          cp data/city.json gles2-test/data/city.json
+          cp audio/city.wav audio/horn.wav gles2-test/audio/
+          test -s gles2-test/data/city.json
           echo "Bundling Makkah road and building data"
           cat > gles2-test/export_presets.cfg <<'EOF'
           [preset.0]
