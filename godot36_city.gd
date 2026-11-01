@@ -114,6 +114,24 @@ func _ready():
         if mid.distance_to(origin)>380: continue
         var h = clamp(float(building.get("h",15)),5,65)
         block(self,Vector3(mid.x,h*0.5,mid.y),Vector3(max(2,high.x-low.x),h,max(2,high.y-low.y)),"#b6aa96")
+    # V11 OpenStreetMap trees and nearby landmarks; keep geometry cheap for Mali-450.
+    var planted = 0
+    for pt in city.get("trees",[]):
+        if planted >= 160: break
+        var tree_pos = Vector2(float(pt[0]),float(pt[1]))
+        if tree_pos.distance_to(origin)>310: continue
+        block(self,Vector3(tree_pos.x,2.1,tree_pos.y),Vector3(0.45,4.2,0.45),"#81603e")
+        block(self,Vector3(tree_pos.x,5.1,tree_pos.y),Vector3(3.2,2.7,3.2),"#47754b")
+        planted += 1
+    var clock_pt = city.get("clock",[])
+    if clock_pt.size()>=2:
+        var clock_pos = Vector2(float(clock_pt[0]),float(clock_pt[1]))
+        if clock_pos.distance_to(origin)<900:
+            # Stylized Abraj Al Bait silhouette; original V11 geometry still to be ported.
+            block(self,Vector3(clock_pos.x,62,clock_pos.y),Vector3(37,124,36),"#a69a80")
+            block(self,Vector3(clock_pos.x,142,clock_pos.y),Vector3(25,36,25),"#c5bba3")
+            block(self,Vector3(clock_pos.x,165,clock_pos.y),Vector3(8,18,8),"#c5a354")
+            block(self,Vector3(clock_pos.x,149,clock_pos.y-12.7),Vector3(13,13,0.3),"#f0e8d4")
     var kaaba_point = city.get("kaaba",[0,0])
     var kp = Vector3(kaaba_point[0],0,kaaba_point[1])
     block(self,kp+Vector3(0,7,0),Vector3(13,14,12),"#24201c")
@@ -147,7 +165,7 @@ func _ready():
     hud.rect_position = Vector2(20,20)
     layer.add_child(hud)
     title_label = Label.new()
-    title_label.text = "CITY FREEDOM | MAKKAH V10 GLES2 DEVELOPMENT"
+    title_label.text = "CITY FREEDOM | MAKKAH V11 REALMAP GLES2 DEVELOPMENT"
     title_label.rect_position = Vector2(20,95)
     layer.add_child(title_label)
     map_panel = Control.new()
