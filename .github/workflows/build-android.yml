@@ -38,6 +38,29 @@ jobs:
           mkdir -p build
           godot --headless --path . --export-debug Android build/CityFreedom-Makkah.apk
           test -s build/CityFreedom-Makkah.apk
+      - name: Build alternative Vulkan Mobile APK for Xiaomi EGL failure
+        run: |
+          cp project.godot project.godot.compat-backup
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("project.godot")
+          s = p.read_text()
+          s = s.replace('renderer/rendering_method="gl_compatibility"', 'renderer/rendering_method="mobile"')
+          s = s.replace('renderer/rendering_method.mobile="gl_compatibility"', 'renderer/rendering_method.mobile="mobile"')
+          s = s.replace('anti_aliasing/quality/msaa_3d=2', 'anti_aliasing/quality/msaa_3d=0')
+          s = s.replace('config/features=PackedStringArray("4.7", "GL Compatibility")', 'config/features=PackedStringArray("4.7", "Mobile")')
+          p.write_text(s)
+          PY
+          godot --headless --editor --path . --quit
+          godot --headless --path . --export-debug Android build/CityFreedom-Makkah-Xiaomi-Vulkan.apk
+          test -s build/CityFreedom-Makkah-Xiaomi-Vulkan.apk
+          mv project.godot.compat-backup project.godot
+      - name: Upload Xiaomi Vulkan alternative
+        uses: actions/upload-artifact@v4
+        with:
+          name: CityFreedom-Makkah-Xiaomi-Vulkan-APK
+          path: build/CityFreedom-Makkah-Xiaomi-Vulkan.apk
+          if-no-files-found: error
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
