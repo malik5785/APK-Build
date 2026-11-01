@@ -1,4 +1,4 @@
-name: Build City Freedom Makkah Android APK
+name: Build V11 GLES2 Android APK
 on:
   workflow_dispatch:
   push:
@@ -6,111 +6,34 @@ on:
 permissions:
   contents: read
 jobs:
-  android-apk:
+  android:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
-      - name: Install Godot 4.7.2 and matching export templates
-        uses: chickensoft-games/setup-godot@v2
-        with:
-          version: 4.7.2
-          use-dotnet: false
-          include-templates: true
-      - name: Import project and check scripts
-        run: godot --headless --editor --path . --quit
-      - name: Runtime smoke test (capture startup errors)
+      - name: Install Godot 3.6.3 and Android templates
         run: |
-          set -o pipefail
-          timeout 90s godot --headless --path . --quit-after 180 2>&1 | tee startup-test.log || true
-          if grep -E 'SCRIPT ERROR|Parse Error|Invalid (access|assignment|call)|ERROR:|FATAL' startup-test.log; then
-            echo 'Runtime diagnostics above; investigate before installing APK.'
-          fi
-      - name: Upload startup diagnostics
-        if: always()
+          set -euo pipefail
+          BASE=https://github.com/godotengine/godot-builds/releases/download/3.6.3-stable
+          curl -fL --retry 3 "$BASE/Godot_v3.6.3-stable_linux_headless.64.zip" -o /tmp/godot.zip
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          sudo install -m 755 /tmp/godot/Godot_v3.6.3-stable_linux_headless.64 /usr/local/bin/godot3
+          curl -fL --retry 3 "$BASE/Godot_v3.6.3-stable_export_templates.tpz" -o /tmp/templates.tpz
+          mkdir -p "$HOME/.local/share/godot/templates/3.6.3.stable"
+          unzip -q /tmp/templates.tpz -d /tmp/tmpl
+          cp -a /tmp/tmpl/templates/. "$HOME/.local/share/godot/templates/3.6.3.stable/"
+      - name: Import project and export Android APK
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android" build
+          keytool -genkeypair -keystore "$HOME/.android/debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=Android Debug,O=Android,C=US" -noprompt
+          sed -i "s|keystore/debug=""|keystore/debug="$HOME/.android/debug.keystore"|" export_presets.cfg
+          godot3 --no-window --editor --path . --quit
+          godot3 --no-window --path . --export-debug Android build/CityFreedom-Makkah-V11-GLES2.apk
+          test -s build/CityFreedom-Makkah-V11-GLES2.apk
+      - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
-          name: CityFreedom-Startup-Diagnostics
-          path: startup-test.log
-          if-no-files-found: warn
-      - name: Build Android debug APK
-        run: |
-          mkdir -p build
-          godot --headless --path . --export-debug Android build/CityFreedom-Makkah.apk
-          test -s build/CityFreedom-Makkah.apk
-      - name: Build alternative Vulkan Mobile APK for Xiaomi EGL failure
-        run: |
-          cp project.godot project.godot.compat-backup
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("project.godot")
-          s = p.read_text()
-          s = s.replace('renderer/rendering_method="gl_compatibility"', 'renderer/rendering_method="mobile"')
-          s = s.replace('renderer/rendering_method.mobile="gl_compatibility"', 'renderer/rendering_method.mobile="mobile"')
-          s = s.replace('anti_aliasing/quality/msaa_3d=2', 'anti_aliasing/quality/msaa_3d=0')
-          s = s.replace('config/features=PackedStringArray("4.7", "GL Compatibility")', 'config/features=PackedStringArray("4.7", "Mobile")')
-          p.write_text(s)
-          PY
-          godot --headless --editor --path . --quit
-          godot --headless --path . --export-debug Android build/CityFreedom-Makkah-Xiaomi-Vulkan.apk
-          test -s build/CityFreedom-Makkah-Xiaomi-Vulkan.apk
-          mv project.godot.compat-backup project.godot
-      - name: Upload Xiaomi Vulkan alternative
-        uses: actions/upload-artifact@v4
-        with:
-          name: CityFreedom-Makkah-Xiaomi-Vulkan-APK
-          path: build/CityFreedom-Makkah-Xiaomi-Vulkan.apk
-          if-no-files-found: error
-      - name: Build minimal OpenGL compatibility diagnostic APK
-        run: |
-          mkdir -p diagnostic
-          cp export_presets.cfg diagnostic/export_presets.cfg
-          cat > diagnostic/project.godot <<'EOF'
-          config_version=5
-          [application]
-          config/name="CityFreedom Graphics Diagnostic"
-          run/main_scene="res://diagnostic.tscn"
-          config/features=PackedStringArray("4.7", "GL Compatibility")
-          [display]
-          window/size/viewport_width=640
-          window/size/viewport_height=360
-          [rendering]
-          renderer/rendering_method="gl_compatibility"
-          renderer/rendering_method.mobile="gl_compatibility"
-          textures/vram_compression/import_etc2_astc=true
-          anti_aliasing/quality/msaa_3d=0
-          EOF
-          cat > diagnostic/diagnostic.tscn <<'EOF'
-          [gd_scene format=3]
-          [node name="Diagnostic" type="Control"]
-          layout_mode = 3
-          anchors_preset = 15
-          anchor_right = 1.0
-          anchor_bottom = 1.0
-          [node name="Message" type="Label" parent="."]
-          layout_mode = 1
-          anchors_preset = 15
-          anchor_right = 1.0
-          anchor_bottom = 1.0
-          text = "GODOT GRAPHICS STARTED OK - CITY FREEDOM DIAGNOSTIC"
-          horizontal_alignment = 1
-          vertical_alignment = 1
-          EOF
-          sed -i 's@build/CityFreedom-Makkah.apk@../build/CityFreedom-Makkah-Graphics-Diagnostic.apk@g' diagnostic/export_presets.cfg
-          sed -i 's@com.cityfreedom.makkah@com.cityfreedom.makkah.diagnostic@g' diagnostic/export_presets.cfg
-          sed -i 's@export_filter="all_resources"@export_filter="all_resources"@' diagnostic/export_presets.cfg
-          godot --headless --editor --path diagnostic --quit
-          godot --headless --path diagnostic --export-debug Android ../build/CityFreedom-Makkah-Graphics-Diagnostic.apk
-          test -s build/CityFreedom-Makkah-Graphics-Diagnostic.apk
-      - name: Upload graphics diagnostic APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: CityFreedom-Makkah-Graphics-Diagnostic
-          path: build/CityFreedom-Makkah-Graphics-Diagnostic.apk
-          if-no-files-found: error
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: CityFreedom-Makkah-Android-APK
-          path: build/CityFreedom-Makkah.apk
+          name: CityFreedom-Makkah-V11-GLES2-APK
+          path: build/CityFreedom-Makkah-V11-GLES2.apk
           if-no-files-found: error
