@@ -99,21 +99,63 @@ func _ready():
             if d.length()<0.5: continue
             var obj = block(self,Vector3(mid.x,0.04,mid.y),Vector3(max(3,float(road[0])),0.08,d.length()),"#56595b")
             obj.rotation.y = -atan2(d.x,d.y)
+    # Preserve actual V11 footprint triangles instead of inaccurate bounding-box towers.
+    var wall_surface = SurfaceTool.new()
+    wall_surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+    var roof_surface = SurfaceTool.new()
+    roof_surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+    var built_count = 0
     for building in buildings:
         var pts = building.get("v",[])
         if pts.size()<3: continue
-        var low = Vector2(100000,100000)
-        var high = Vector2(-100000,-100000)
+        var center = Vector2()
         for pt in pts:
-            var p = Vector2(pt[0],pt[1])
-            low.x = min(low.x,p.x)
-            low.y = min(low.y,p.y)
-            high.x = max(high.x,p.x)
-            high.y = max(high.y,p.y)
-        var mid = (low+high)*0.5
-        if mid.distance_to(origin)>380: continue
-        var h = clamp(float(building.get("h",15)),5,65)
-        block(self,Vector3(mid.x,h*0.5,mid.y),Vector3(max(2,high.x-low.x),h,max(2,high.y-low.y)),"#b6aa96")
+            center += Vector2(float(pt[0]),float(pt[1]))
+        center /= float(pts.size())
+        if center.distance_to(origin)>390: continue
+        var h = clamp(float(building.get("h",15)),3.0,90.0)
+        var color_hex = str(building.get("c","b6aa96"))
+        if not color_hex.begins_with("#"): color_hex = "#"+color_hex
+        var wall_color = Color(color_hex)
+        for i in range(pts.size()):
+            var j = (i+1)%pts.size()
+            var p = Vector3(float(pts[i][0]),0,float(pts[i][1]))
+            var q = Vector3(float(pts[j][0]),0,float(pts[j][1]))
+            if p.distance_to(q)<0.05: continue
+            wall_surface.add_color(wall_color)
+            wall_surface.add_vertex(p)
+            wall_surface.add_color(wall_color)
+            wall_surface.add_vertex(q)
+            wall_surface.add_color(wall_color)
+            wall_surface.add_vertex(q+Vector3(0,h,0))
+            wall_surface.add_color(wall_color)
+            wall_surface.add_vertex(p)
+            wall_surface.add_color(wall_color)
+            wall_surface.add_vertex(q+Vector3(0,h,0))
+            wall_surface.add_color(wall_color)
+            wall_surface.add_vertex(p+Vector3(0,h,0))
+        var tris = building.get("t",[])
+        for i in range(0,tris.size()-2,3):
+            var i0 = int(tris[i])
+            var i1 = int(tris[i+1])
+            var i2 = int(tris[i+2])
+            if i0<0 or i1<0 or i2<0 or i0>=pts.size() or i1>=pts.size() or i2>=pts.size(): continue
+            for ix in [i0,i1,i2]:
+                roof_surface.add_color(wall_color.lightened(0.15))
+                roof_surface.add_vertex(Vector3(float(pts[ix][0]),h,float(pts[ix][1])))
+        built_count += 1
+    if built_count>0:
+        var walls = MeshInstance.new()
+        walls.mesh = wall_surface.commit()
+        var wm = SpatialMaterial.new()
+        wm.vertex_color_use_as_albedo = true
+        wm.params_cull_mode = SpatialMaterial.CULL_DISABLED
+        walls.material_override = wm
+        add_child(walls)
+        var roofs = MeshInstance.new()
+        roofs.mesh = roof_surface.commit()
+        roofs.material_override = wm
+        add_child(roofs)
     # V11 OpenStreetMap trees and nearby landmarks; keep geometry cheap for Mali-450.
     var planted = 0
     for pt in city.get("trees",[]):
