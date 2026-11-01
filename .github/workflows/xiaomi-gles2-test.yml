@@ -1,0 +1,98 @@
+name: Xiaomi Godot 3.6 GLES2 Graphics Test
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/xiaomi-gles2-test.yml'
+permissions:
+  contents: read
+jobs:
+  gles2-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Godot 3.6 and Android export templates
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 3.6
+          use-dotnet: false
+          include-templates: true
+      - name: Create minimal GLES2 Android project
+        run: |
+          mkdir -p gles2-test build
+          cat > gles2-test/project.godot <<'EOF'
+          config_version=4
+
+          [application]
+          config/name="CityFreedom GLES2 Test"
+          run/main_scene="res://test.tscn"
+
+          [display]
+          window/size/width=640
+          window/size/height=360
+
+          [rendering]
+          quality/driver/driver_name="GLES2"
+          quality/2d/use_pixel_snap=true
+          EOF
+          cat > gles2-test/test.tscn <<'EOF'
+          [gd_scene format=2]
+
+          [node name="Root" type="Control"]
+          anchor_right = 1.0
+          anchor_bottom = 1.0
+
+          [node name="Label" type="Label" parent="."]
+          anchor_right = 1.0
+          anchor_bottom = 1.0
+          text = "GLES2 GRAPHICS WORKING"
+          align = 1
+          valign = 1
+          EOF
+          cat > gles2-test/export_presets.cfg <<'EOF'
+          [preset.0]
+
+          name="Android"
+          platform="Android"
+          runnable=true
+          custom_features=""
+          export_filter="all_resources"
+          include_filter=""
+          exclude_filter=""
+          export_path="../build/CityFreedom-Godot36-GLES2-Test.apk"
+          script_export_mode=1
+          script_encryption_key=""
+
+          [preset.0.options]
+
+          custom_template/debug=""
+          custom_template/release=""
+          custom_template/use_custom_build=false
+          version/code=1
+          version/name="1.0"
+          package/unique_name="com.cityfreedom.gles2test"
+          package/name="CityFreedom GLES2 Test"
+          package/signed=true
+          architectures/armeabi-v7a=true
+          architectures/arm64-v8a=true
+          screen/immersive_mode=true
+          screen/support_small=true
+          screen/support_normal=true
+          screen/support_large=true
+          screen/support_xlarge=true
+          graphics/32_bits_framebuffer=true
+          graphics/opengl_debug=false
+          EOF
+      - name: Import and export GLES2 test APK
+        run: |
+          godot --headless --editor --path gles2-test --quit
+          godot --headless --path gles2-test --export-debug Android ../build/CityFreedom-Godot36-GLES2-Test.apk
+          test -s build/CityFreedom-Godot36-GLES2-Test.apk
+      - name: Upload GLES2 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CityFreedom-Godot36-GLES2-Test
+          path: build/CityFreedom-Godot36-GLES2-Test.apk
+          if-no-files-found: error
