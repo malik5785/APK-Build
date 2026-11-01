@@ -22,6 +22,10 @@ var horn_audio = null
 var outfit_index = 0
 var outfit_colors = ["#e9e7df", "#3b4659", "#9b8d7d", "#ffffff"]
 var player_body = null
+var minimap = null
+var wardrobe_panel = null
+var wardrobe_label = null
+var map_visible = true
 
 func mat(color):
     if materials.has(color): return materials[color]
@@ -185,13 +189,43 @@ func _ready():
     hud=Label.new()
     hud.rect_position=Vector2(20,20)
     layer.add_child(hud)
+    minimap=Control.new()
+    minimap.rect_position=Vector2(445,18)
+    minimap.rect_min_size=Vector2(176,176)
+    layer.add_child(minimap)
+    var map_back=ColorRect.new()
+    map_back.color=Color(0.05,0.11,0.15,0.82)
+    map_back.rect_size=Vector2(176,176)
+    minimap.add_child(map_back)
+    var map_title=Label.new()
+    map_title.text="MAKKAH  |  MAP"
+    map_title.rect_position=Vector2(8,5)
+    minimap.add_child(map_title)
+    wardrobe_panel=Panel.new()
+    wardrobe_panel.rect_position=Vector2(18,110)
+    wardrobe_panel.rect_min_size=Vector2(270,95)
+    wardrobe_panel.visible=false
+    layer.add_child(wardrobe_panel)
+    wardrobe_label=Label.new()
+    wardrobe_label.rect_position=Vector2(12,12)
+    wardrobe_panel.add_child(wardrobe_label)
+    refresh_wardrobe()
+
+func refresh_wardrobe():
+    if wardrobe_label!=null:
+        wardrobe_label.text="WARDROBE | Outfit "+str(outfit_index+1)+"/"+str(outfit_colors.size())+"\nW: next outfit | O: close"
 
 func _unhandled_input(event):
     if event is InputEventKey and event.pressed and not event.echo:
+        if event.scancode==KEY_M and minimap!=null:
+            map_visible=not map_visible
+            minimap.visible=map_visible
+        if event.scancode==KEY_O and wardrobe_panel!=null: wardrobe_panel.visible=not wardrobe_panel.visible
         if event.scancode==KEY_H and horn_audio!=null and horn_audio.stream!=null: horn_audio.play()
         if event.scancode==KEY_W and player_body!=null:
             outfit_index=(outfit_index+1)%outfit_colors.size()
             player_body.material_override=mat(outfit_colors[outfit_index])
+            refresh_wardrobe()
 
 func _process(dt):
     var steer=int(Input.is_action_pressed("ui_right"))-int(Input.is_action_pressed("ui_left"))
@@ -236,4 +270,7 @@ func _process(dt):
     var height=8.0 if camera_mode==0 else (4.0 if camera_mode==1 else 2.5)
     camera.translation=pos+Vector3(-sin(heading)*distance,height,cos(heading)*distance)
     camera.look_at(pos+Vector3(0,1,0),Vector3.UP)
+    if minimap!=null and map_visible:
+        minimap.rect_rotation=0
+        minimap.hint_tooltip="Player: "+str(int(pos.x))+", "+str(int(pos.z))
     hud.text="CITY FREEDOM MAKKAH | V11 REALMAP GLES2 COMPATIBILITY\nD-PAD MOVE | OK WALK/DRIVE | BACK CAMERA\n"+str(int(abs(velocity)*3.6))+" km/h | "+str(int(time_of_day))+":00"
