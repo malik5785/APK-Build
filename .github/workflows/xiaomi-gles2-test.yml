@@ -41,6 +41,8 @@ jobs:
 
           [rendering]
           quality/driver/driver_name="GLES2"
+          vram_compression/import_etc=true
+          vram_compression/import_etc2=false
           quality/2d/use_pixel_snap=true
           EOF
           cat > gles2-test/test.tscn <<'EOF'
