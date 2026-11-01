@@ -19,6 +19,15 @@ var pedestrians = []
 var time_of_day = 10.0
 var sun_node
 var camera_mode = 0
+var map_layer
+var map_panel
+var map_visible = false
+var wardrobe_visible = false
+var outfit_index = 0
+var outfits = ["#f0f0e9","#293b58","#8b7355","#393939"]
+var player_torso
+var minimap
+var title_label
 
 func material(c):
     if material_cache.has(c): return material_cache[c]
@@ -101,7 +110,7 @@ func _ready():
     block(car,Vector3(0,1.2,0),Vector3(1.8,0.65,2.2),"#263b49")
     walker = Spatial.new()
     add_child(walker)
-    block(walker,Vector3(0,1,0),Vector3(0.65,1.25,0.4),"#f0f0e9")
+    player_torso = block(walker,Vector3(0,1,0),Vector3(0.65,1.25,0.4),"#f0f0e9")
     block(walker,Vector3(0,1.85,0),Vector3(0.4,0.42,0.42),"#ae826a")
     for i in range(12):
         var npc = Spatial.new()
@@ -125,12 +134,39 @@ func _ready():
     hud = Label.new()
     hud.rect_position = Vector2(20,20)
     layer.add_child(hud)
+    title_label = Label.new()
+    title_label.text = "CITY FREEDOM | MAKKAH V10 GLES2 DEVELOPMENT"
+    title_label.rect_position = Vector2(20,95)
+    layer.add_child(title_label)
+    map_panel = Control.new()
+    map_panel.rect_position = Vector2(20,125)
+    map_panel.rect_min_size = Vector2(220,220)
+    layer.add_child(map_panel)
+    minimap = Label.new()
+    minimap.rect_position = Vector2(0,0)
+    map_panel.add_child(minimap)
+    map_panel.visible = false
 
 func _process(dt):
     var steer = int(Input.is_action_pressed("ui_right"))-int(Input.is_action_pressed("ui_left"))
     if Input.is_action_pressed("ui_up"): speed = min(speed+18*dt,30)
     elif Input.is_action_pressed("ui_down"): speed = max(speed-22*dt,-12)
     else: speed = lerp(speed,0.0,min(1,dt*2))
+    if Input.is_key_pressed(KEY_M) and not map_visible:
+        map_visible = true
+        map_panel.visible = true
+    elif Input.is_key_pressed(KEY_N) and map_visible:
+        map_visible = false
+        map_panel.visible = false
+    if Input.is_key_pressed(KEY_1):
+        outfit_index = 0
+    elif Input.is_key_pressed(KEY_2):
+        outfit_index = 1
+    elif Input.is_key_pressed(KEY_3):
+        outfit_index = 2
+    elif Input.is_key_pressed(KEY_4):
+        outfit_index = 3
+    player_torso.material_override = material(outfits[outfit_index])
     if Input.is_action_just_pressed("ui_cancel"):
         camera_mode = (camera_mode+1)%3
     if Input.is_action_just_pressed("ui_accept"):
@@ -174,4 +210,5 @@ func _process(dt):
     var elevation = 8.0 if camera_mode==0 else (4.0 if camera_mode==1 else 2.5)
     camera.translation = player_pos + Vector3(-sin(heading)*distance,elevation,cos(heading)*distance)
     camera.look_at(player_pos,Vector3.UP)
+    minimap.text = "MAP / DISTRICT\nX: "+str(int(player_pos.x))+" Z: "+str(int(player_pos.z))+"\nROADS: "+str(roads.size())+"\nM close: N\nOUTFITS: 1-4"
     hud.text = "CITY FREEDOM MAKKAH | 3D GLES2 PORT\nD-PAD MOVE | OK WALK/DRIVE | BACK CAMERA | "+str(int(abs(speed)*3.6))+" km/h\nOSM roads "+str(roads.size())+" | buildings "+str(buildings.size())
