@@ -93,6 +93,8 @@ jobs:
           EOF
       - name: Import and export GLES2 test APK
         run: |
+          mkdir -p "$HOME/.android"
+          keytool -genkeypair -keystore "$HOME/.android/debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=Android Debug,O=Android,C=US" -noprompt
           godot3 --no-window --editor --path gles2-test --quit
           godot3 --no-window --path gles2-test --export-debug Android ../build/CityFreedom-Godot36-GLES2-Test.apk
           test -s build/CityFreedom-Godot36-GLES2-Test.apk
