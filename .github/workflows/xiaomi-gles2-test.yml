@@ -16,7 +16,7 @@ jobs:
       - name: Install Godot 3.6 and Android export templates
         uses: chickensoft-games/setup-godot@v2
         with:
-          version: 3.6.0
+          version: 3.6.3
           use-dotnet: false
           include-templates: true
       - name: Create minimal GLES2 Android project
