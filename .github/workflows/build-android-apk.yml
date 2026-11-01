@@ -27,9 +27,58 @@ jobs:
           set -euo pipefail
           mkdir -p "$HOME/.android" build
           keytool -genkeypair -keystore "$HOME/.android/debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=Android Debug,O=Android,C=US" -noprompt
-          sed -i "s|keystore/debug=""|keystore/debug="$HOME/.android/debug.keystore"|" export_presets.cfg
-          godot3 --no-window --editor --path . --quit
-          godot3 --no-window --path . --export-debug Android build/CityFreedom-Makkah-V11-GLES2.apk
+          mkdir -p v11-export
+          cp game.gd main.tscn v11-export/
+          cp data/city.json v11-export/city.json
+          cat > v11-export/project.godot <<'EOF'
+          config_version=4
+          [application]
+          config/name="City Freedom Makkah V11"
+          run/main_scene="res://main.tscn"
+          [display]
+          window/size/width=640
+          window/size/height=360
+          [rendering]
+          quality/driver/driver_name="GLES2"
+          vram_compression/import_etc=true
+          EOF
+          cat > v11-export/export_presets.cfg <<'EOF'
+          [preset.0]
+          name="Android"
+          platform="Android"
+          runnable=true
+          custom_features=""
+          export_filter="all_resources"
+          include_filter="*.json"
+          exclude_filter=""
+          export_path="../build/CityFreedom-Makkah-V11-GLES2.apk"
+          script_export_mode=1
+          script_encryption_key=""
+          [preset.0.options]
+          custom_template/debug=""
+          custom_template/release=""
+          custom_template/use_custom_build=false
+          version/code=11
+          version/name="11.0"
+          package/unique_name="com.cityfreedom.makkahv11gles2"
+          package/name="City Freedom Makkah V11"
+          package/signed=true
+          keystore/debug=""
+          keystore/debug_user="androiddebugkey"
+          keystore/debug_password="android"
+          architectures/armeabi-v7a=true
+          architectures/arm64-v8a=true
+          screen/immersive_mode=true
+          screen/support_small=true
+          screen/support_normal=true
+          screen/support_large=true
+          screen/support_xlarge=true
+          graphics/32_bits_framebuffer=true
+          graphics/opengl_debug=false
+          EOF
+          sed -i "s|keystore/debug=\\"\\"|keystore/debug=\\"$HOME/.android/debug.keystore\\"|" v11-export/export_presets.cfg
+          godot3 --no-window --editor --path v11-export --quit
+          godot3 --no-window --path v11-export --export-debug Android ../build/CityFreedom-Makkah-V11-GLES2.apk
           test -s build/CityFreedom-Makkah-V11-GLES2.apk
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
