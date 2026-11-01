@@ -23,6 +23,7 @@ func _ready():
         pos = Vector2(city["start"][0],city["start"][1])
     if city.has("sdir"):
         heading = atan2(city["sdir"][0],-city["sdir"][1])
+    print("MAKKAH_DATA_LOADED roads=",city.get("roads",[]).size()," buildings=",city.get("bld",[]).size())
     roads = city.get("roads",[])
     buildings = city.get("bld",[])
     areas = city.get("areas",[])
@@ -93,5 +94,9 @@ func _draw():
     draw_rect(Rect2(0,0,view.x,58),Color(0.06,0.11,0.15,0.85))
     draw_string(font,Vector2(18,26),"CITY FREEDOM  -  MAKKAH",Color.white)
     draw_string(font,Vector2(18,46),"MI BOX GLES2 | Real Makkah map | D-PAD DRIVE | OK ZOOM",Color("#c9e7fa"))
+    if roads.empty():
+        draw_rect(Rect2(10,80,view.x-20,85),Color(0.65,0.05,0.05,0.9))
+        draw_string(font,Vector2(20,110),"ERROR: MAKKAH MAP DATA NOT LOADED",Color.white)
+        draw_string(font,Vector2(20,138),"city.json missing from Android package",Color.white)
     draw_rect(Rect2(0,view.y-35,view.x,35),Color(0.06,0.11,0.15,0.85))
     draw_string(font,Vector2(18,view.y-13),"SPEED: "+str(int(abs(speed)))+" km/h     ROADS: "+str(roads.size())+"     BUILDINGS: "+str(buildings.size()),Color.white)
