@@ -10,6 +10,10 @@ var car
 var camera
 var hud
 var material_cache = {}
+var driving = true
+var walker
+var traffic = []
+var clock = 0.0
 
 func material(c):
     if material_cache.has(c): return material_cache[c]
@@ -80,6 +84,16 @@ func _ready():
     add_child(car)
     block(car,Vector3(0,0.6,0),Vector3(2.2,0.8,4.2),"#d9322c")
     block(car,Vector3(0,1.2,0),Vector3(1.8,0.65,2.2),"#263b49")
+    walker = Spatial.new()
+    add_child(walker)
+    block(walker,Vector3(0,1,0),Vector3(0.65,1.25,0.4),"#f0f0e9")
+    block(walker,Vector3(0,1.85,0),Vector3(0.4,0.42,0.42),"#ae826a")
+    for i in range(12):
+        var npc = Spatial.new()
+        add_child(npc)
+        block(npc,Vector3(0,0.6,0),Vector3(2,0.7,3.8),"#3d526b" if i%3==0 else "#ddddda")
+        block(npc,Vector3(0,1.15,0),Vector3(1.6,0.6,1.8),"#283843")
+        traffic.append({"node":npc,"angle":float(i)*0.52,"radius":85.0+float(i%4)*38.0,"speed":0.05+float(i%3)*0.015})
     camera = Camera.new()
     camera.current = true
     camera.far = 1800
@@ -95,10 +109,25 @@ func _process(dt):
     if Input.is_action_pressed("ui_up"): speed = min(speed+18*dt,30)
     elif Input.is_action_pressed("ui_down"): speed = max(speed-22*dt,-12)
     else: speed = lerp(speed,0.0,min(1,dt*2))
-    heading += steer*dt*1.1
+    if Input.is_action_just_pressed("ui_accept"):
+        driving = not driving
+        speed = 0
+    heading += steer*dt*(1.1 if driving else 2.2)
     player_pos += Vector3(sin(heading),0,-cos(heading))*speed*dt
+    if not driving:
+        speed = clamp(speed,-4,6)
+    car.visible = driving
+    walker.visible = not driving
+    walker.translation = player_pos
+    walker.rotation.y = heading
+    clock += dt
+    for t in traffic:
+        var a = t["angle"]+clock*t["speed"]
+        var n = t["node"]
+        n.translation = Vector3(44.1+cos(a)*t["radius"],1,288.6+sin(a)*t["radius"])
+        n.rotation.y = -a
     car.translation = player_pos
     car.rotation.y = heading
     camera.translation = player_pos + Vector3(-sin(heading)*13,8,cos(heading)*13)
     camera.look_at(player_pos,Vector3.UP)
-    hud.text = "CITY FREEDOM MAKKAH | 3D GLES2 PORT\nD-PAD DRIVE  |  "+str(int(abs(speed)*3.6))+" km/h\nOSM roads "+str(roads.size())+" | buildings "+str(buildings.size())
+    hud.text = "CITY FREEDOM MAKKAH | 3D GLES2 PORT\nD-PAD MOVE | OK WALK/DRIVE | "+str(int(abs(speed)*3.6))+" km/h\nOSM roads "+str(roads.size())+" | buildings "+str(buildings.size())
