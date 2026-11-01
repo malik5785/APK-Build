@@ -13,12 +13,18 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Install Godot 3.6 and Android export templates
-        uses: chickensoft-games/setup-godot@v2
-        with:
-          version: 3.6.3
-          use-dotnet: false
-          include-templates: true
+      - name: Install official Godot 3.6.3 headless editor and Android export templates
+        run: |
+          set -euo pipefail
+          BASE=https://github.com/godotengine/godot-builds/releases/download/3.6.3-stable
+          curl -fL --retry 3 "$BASE/Godot_v3.6.3-stable_linux_headless.64.zip" -o /tmp/godot3.zip
+          unzip -q /tmp/godot3.zip -d /tmp/godot3
+          install -m 755 /tmp/godot3/Godot_v3.6.3-stable_linux_headless.64 /usr/local/bin/godot3
+          curl -fL --retry 3 "$BASE/Godot_v3.6.3-stable_export_templates.tpz" -o /tmp/godot3-templates.tpz
+          mkdir -p "$HOME/.local/share/godot/templates/3.6.3.stable"
+          unzip -q /tmp/godot3-templates.tpz -d /tmp/godot3-templates
+          cp -a /tmp/godot3-templates/templates/. "$HOME/.local/share/godot/templates/3.6.3.stable/"
+          godot3 --version
       - name: Create minimal GLES2 Android project
         run: |
           mkdir -p gles2-test build
@@ -87,8 +93,8 @@ jobs:
           EOF
       - name: Import and export GLES2 test APK
         run: |
-          godot --headless --editor --path gles2-test --quit
-          godot --headless --path gles2-test --export-debug Android ../build/CityFreedom-Godot36-GLES2-Test.apk
+          godot3 --no-window --editor --path gles2-test --quit
+          godot3 --no-window --path gles2-test --export-debug Android ../build/CityFreedom-Godot36-GLES2-Test.apk
           test -s build/CityFreedom-Godot36-GLES2-Test.apk
       - name: Upload GLES2 APK
         uses: actions/upload-artifact@v4
