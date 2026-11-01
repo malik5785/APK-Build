@@ -81,6 +81,9 @@ jobs:
           package/unique_name="com.cityfreedom.gles2test"
           package/name="CityFreedom GLES2 Test"
           package/signed=true
+          keystore/debug=""
+          keystore/debug_user="androiddebugkey"
+          keystore/debug_password="android"
           architectures/armeabi-v7a=true
           architectures/arm64-v8a=true
           screen/immersive_mode=true
@@ -95,6 +98,7 @@ jobs:
         run: |
           mkdir -p "$HOME/.android"
           keytool -genkeypair -keystore "$HOME/.android/debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=Android Debug,O=Android,C=US" -noprompt
+          sed -i "s|keystore/debug=\"\"|keystore/debug=\"$HOME/.android/debug.keystore\"|" gles2-test/export_presets.cfg
           godot3 --no-window --editor --path gles2-test --quit
           godot3 --no-window --path gles2-test --export-debug Android ../build/CityFreedom-Godot36-GLES2-Test.apk
           test -s build/CityFreedom-Godot36-GLES2-Test.apk
