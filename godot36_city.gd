@@ -14,6 +14,11 @@ var driving = true
 var walker
 var traffic = []
 var clock = 0.0
+var road_routes = []
+var pedestrians = []
+var time_of_day = 10.0
+var sun_node
+var camera_mode = 0
 
 func material(c):
     if material_cache.has(c): return material_cache[c]
@@ -50,9 +55,16 @@ func _ready():
     var sun = DirectionalLight.new()
     sun.rotation_degrees = Vector3(-55,35,0)
     add_child(sun)
+    sun_node = sun
     block(self,Vector3(0,-1,0),Vector3(8500,2,8500),"#c8b99b")
     var origin = Vector2(player_pos.x,player_pos.z)
     for road in roads:
+        if road.size()>2 and road[2].size()>3 and road_routes.size()<180:
+            var route = []
+            for point in road[2]:
+                if Vector2(point[0],point[1]).distance_to(origin)<450:
+                    route.append(Vector3(point[0],1,point[1]))
+            if route.size()>3: road_routes.append(route)
         if road.size()<3: continue
         var pts = road[2]
         for i in range(pts.size()-1):
@@ -79,7 +91,10 @@ func _ready():
         if mid.distance_to(origin)>380: continue
         var h = clamp(float(building.get("h",15)),5,65)
         block(self,Vector3(mid.x,h*0.5,mid.y),Vector3(max(2,high.x-low.x),h,max(2,high.y-low.y)),"#b6aa96")
-    block(self,Vector3(0,11,0),Vector3(16,22,16),"#282421")
+    var kaaba_point = city.get("kaaba",[0,0])
+    var kp = Vector3(kaaba_point[0],0,kaaba_point[1])
+    block(self,kp+Vector3(0,7,0),Vector3(13,14,12),"#24201c")
+    block(self,kp+Vector3(0,10,0),Vector3(13.2,1.2,12.2),"#c5a354")
     car = Spatial.new()
     add_child(car)
     block(car,Vector3(0,0.6,0),Vector3(2.2,0.8,4.2),"#d9322c")
@@ -93,7 +108,14 @@ func _ready():
         add_child(npc)
         block(npc,Vector3(0,0.6,0),Vector3(2,0.7,3.8),"#3d526b" if i%3==0 else "#ddddda")
         block(npc,Vector3(0,1.15,0),Vector3(1.6,0.6,1.8),"#283843")
-        traffic.append({"node":npc,"angle":float(i)*0.52,"radius":85.0+float(i%4)*38.0,"speed":0.05+float(i%3)*0.015})
+        if road_routes.size()>0:
+            traffic.append({"node":npc,"route":road_routes[(i*7)%road_routes.size()],"segment":0,"progress":float(i%5)*0.1,"speed":7.0+float(i%4)*2.0})
+    for i in range(20):
+        var person = Spatial.new()
+        add_child(person)
+        block(person,Vector3(0,1.05,0),Vector3(0.5,1.0,0.35),"#e9e5dc" if i%2==0 else "#42444b")
+        block(person,Vector3(0,1.8,0),Vector3(0.35,0.38,0.35),"#a98166")
+        pedestrians.append({"node":person,"angle":float(i)*0.314,"radius":25.0+float(i%5)*8.0})
     camera = Camera.new()
     camera.current = true
     camera.far = 1800
@@ -109,6 +131,8 @@ func _process(dt):
     if Input.is_action_pressed("ui_up"): speed = min(speed+18*dt,30)
     elif Input.is_action_pressed("ui_down"): speed = max(speed-22*dt,-12)
     else: speed = lerp(speed,0.0,min(1,dt*2))
+    if Input.is_action_just_pressed("ui_cancel"):
+        camera_mode = (camera_mode+1)%3
     if Input.is_action_just_pressed("ui_accept"):
         driving = not driving
         speed = 0
@@ -122,12 +146,32 @@ func _process(dt):
     walker.rotation.y = heading
     clock += dt
     for t in traffic:
-        var a = t["angle"]+clock*t["speed"]
+        var route = t["route"]
+        var segment = int(t["segment"])
+        if route.size()<2: continue
+        var a = route[segment]
+        var b = route[segment+1]
+        t["progress"] += dt*t["speed"]/max(0.1,a.distance_to(b))
+        if t["progress"]>=1.0:
+            t["progress"] = 0.0
+            t["segment"] = (segment+1)%(route.size()-1)
+            segment = int(t["segment"])
+            a = route[segment]
+            b = route[segment+1]
         var n = t["node"]
-        n.translation = Vector3(44.1+cos(a)*t["radius"],1,288.6+sin(a)*t["radius"])
-        n.rotation.y = -a
+        n.translation = a.linear_interpolate(b,t["progress"])
+        n.rotation.y = atan2(b.x-a.x,b.z-a.z)
+    for p in pedestrians:
+        var a = p["angle"]+clock*0.06
+        p["node"].translation = Vector3(44.1+cos(a)*p["radius"],0,288.6+sin(a)*p["radius"])
+        p["node"].rotation.y = -a
+    time_of_day = fmod(time_of_day+dt*0.015,24.0)
+    sun_node.rotation_degrees.x = -65.0*sin(time_of_day*PI/12.0)
+    sun_node.light_energy = 0.85 if time_of_day>6.0 and time_of_day<18.0 else 0.15
     car.translation = player_pos
     car.rotation.y = heading
-    camera.translation = player_pos + Vector3(-sin(heading)*13,8,cos(heading)*13)
+    var distance = 13.0 if camera_mode==0 else (6.0 if camera_mode==1 else 0.1)
+    var elevation = 8.0 if camera_mode==0 else (4.0 if camera_mode==1 else 2.5)
+    camera.translation = player_pos + Vector3(-sin(heading)*distance,elevation,cos(heading)*distance)
     camera.look_at(player_pos,Vector3.UP)
-    hud.text = "CITY FREEDOM MAKKAH | 3D GLES2 PORT\nD-PAD MOVE | OK WALK/DRIVE | "+str(int(abs(speed)*3.6))+" km/h\nOSM roads "+str(roads.size())+" | buildings "+str(buildings.size())
+    hud.text = "CITY FREEDOM MAKKAH | 3D GLES2 PORT\nD-PAD MOVE | OK WALK/DRIVE | BACK CAMERA | "+str(int(abs(speed)*3.6))+" km/h\nOSM roads "+str(roads.size())+" | buildings "+str(buildings.size())
