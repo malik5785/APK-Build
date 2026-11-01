@@ -61,6 +61,52 @@ jobs:
           name: CityFreedom-Makkah-Xiaomi-Vulkan-APK
           path: build/CityFreedom-Makkah-Xiaomi-Vulkan.apk
           if-no-files-found: error
+      - name: Build minimal OpenGL compatibility diagnostic APK
+        run: |
+          mkdir -p diagnostic
+          cp export_presets.cfg diagnostic/export_presets.cfg
+          cat > diagnostic/project.godot <<'EOF'
+          config_version=5
+          [application]
+          config/name="CityFreedom Graphics Diagnostic"
+          run/main_scene="res://diagnostic.tscn"
+          config/features=PackedStringArray("4.7", "GL Compatibility")
+          [display]
+          window/size/viewport_width=640
+          window/size/viewport_height=360
+          [rendering]
+          renderer/rendering_method="gl_compatibility"
+          renderer/rendering_method.mobile="gl_compatibility"
+          anti_aliasing/quality/msaa_3d=0
+          EOF
+          cat > diagnostic/diagnostic.tscn <<'EOF'
+          [gd_scene format=3]
+          [node name="Diagnostic" type="Control"]
+          layout_mode = 3
+          anchors_preset = 15
+          anchor_right = 1.0
+          anchor_bottom = 1.0
+          [node name="Message" type="Label" parent="."]
+          layout_mode = 1
+          anchors_preset = 15
+          anchor_right = 1.0
+          anchor_bottom = 1.0
+          text = "GODOT GRAPHICS STARTED OK - CITY FREEDOM DIAGNOSTIC"
+          horizontal_alignment = 1
+          vertical_alignment = 1
+          EOF
+          sed -i 's@build/CityFreedom-Makkah.apk@../build/CityFreedom-Makkah-Graphics-Diagnostic.apk@g' diagnostic/export_presets.cfg
+          sed -i 's@com.cityfreedom.makkah@com.cityfreedom.makkah.diagnostic@g' diagnostic/export_presets.cfg
+          sed -i 's@export_filter="all_resources"@export_filter="all_resources"@' diagnostic/export_presets.cfg
+          godot --headless --editor --path diagnostic --quit
+          godot --headless --path diagnostic --export-debug Android ../build/CityFreedom-Makkah-Graphics-Diagnostic.apk
+          test -s build/CityFreedom-Makkah-Graphics-Diagnostic.apk
+      - name: Upload graphics diagnostic APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CityFreedom-Makkah-Graphics-Diagnostic
+          path: build/CityFreedom-Makkah-Graphics-Diagnostic.apk
+          if-no-files-found: error
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
