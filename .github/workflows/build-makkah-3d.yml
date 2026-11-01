@@ -3,8 +3,6 @@ on:
   workflow_dispatch:
   push:
     branches: [gles2-3d]
-    paths:
-      - '.github/workflows/build-makkah-3d.yml'
 permissions:
   contents: read
 jobs:
