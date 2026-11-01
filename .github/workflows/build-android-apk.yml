@@ -6,34 +6,101 @@ on:
 permissions:
   contents: read
 jobs:
-  android:
+  gles2-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Install Godot 3.6.3 and Android templates
+      - name: Install official Godot 3.6.3 headless editor and Android export templates
         run: |
           set -euo pipefail
           BASE=https://github.com/godotengine/godot-builds/releases/download/3.6.3-stable
-          curl -fL --retry 3 "$BASE/Godot_v3.6.3-stable_linux_headless.64.zip" -o /tmp/godot.zip
-          unzip -q /tmp/godot.zip -d /tmp/godot
-          sudo install -m 755 /tmp/godot/Godot_v3.6.3-stable_linux_headless.64 /usr/local/bin/godot3
-          curl -fL --retry 3 "$BASE/Godot_v3.6.3-stable_export_templates.tpz" -o /tmp/templates.tpz
+          curl -fL --retry 3 "$BASE/Godot_v3.6.3-stable_linux_headless.64.zip" -o /tmp/godot3.zip
+          unzip -q /tmp/godot3.zip -d /tmp/godot3
+          install -m 755 /tmp/godot3/Godot_v3.6.3-stable_linux_headless.64 /usr/local/bin/godot3
+          curl -fL --retry 3 "$BASE/Godot_v3.6.3-stable_export_templates.tpz" -o /tmp/godot3-templates.tpz
           mkdir -p "$HOME/.local/share/godot/templates/3.6.3.stable"
-          unzip -q /tmp/templates.tpz -d /tmp/tmpl
-          cp -a /tmp/tmpl/templates/. "$HOME/.local/share/godot/templates/3.6.3.stable/"
-      - name: Import project and export Android APK
+          unzip -q /tmp/godot3-templates.tpz -d /tmp/godot3-templates
+          cp -a /tmp/godot3-templates/templates/. "$HOME/.local/share/godot/templates/3.6.3.stable/"
+          godot3 --version
+      - name: Create minimal GLES2 Android project
         run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.android" build
+          mkdir -p gles2-test build
+          cat > gles2-test/project.godot <<'EOF'
+          config_version=4
+
+          [application]
+          config/name="City Freedom Makkah"
+          run/main_scene="res://main.tscn"
+
+          [display]
+          window/size/width=640
+          window/size/height=360
+
+          [rendering]
+          quality/driver/driver_name="GLES2"
+          vram_compression/import_etc=true
+          vram_compression/import_etc2=false
+          quality/2d/use_pixel_snap=true
+          EOF
+          cat > gles2-test/main.tscn <<'EOF'
+          [gd_scene load_steps=2 format=2]
+          [ext_resource path="res://game.gd" type="Script" id=1]
+          [node name="MakkahGame" type="Spatial"]
+          script = ExtResource( 1 )
+          EOF
+          cp game.gd gles2-test/game.gd
+          cp data/city.json gles2-test/city.json
+          test -s gles2-test/city.json
+          echo "Bundling Makkah road and building data"
+          cat > gles2-test/export_presets.cfg <<'EOF'
+          [preset.0]
+
+          name="Android"
+          platform="Android"
+          runnable=true
+          custom_features=""
+          export_filter="all_resources"
+          include_filter="*.json"
+          exclude_filter=""
+          export_path="../build/CityFreedom-Makkah-V11-GLES2.apk"
+          script_export_mode=1
+          script_encryption_key=""
+
+          [preset.0.options]
+
+          custom_template/debug=""
+          custom_template/release=""
+          custom_template/use_custom_build=false
+          version/code=1
+          version/name="1.0"
+          package/unique_name="com.cityfreedom.makkahv11gles2"
+          package/name="City Freedom Makkah"
+          package/signed=true
+          keystore/debug=""
+          keystore/debug_user="androiddebugkey"
+          keystore/debug_password="android"
+          architectures/armeabi-v7a=true
+          architectures/arm64-v8a=true
+          screen/immersive_mode=true
+          screen/support_small=true
+          screen/support_normal=true
+          screen/support_large=true
+          screen/support_xlarge=true
+          graphics/32_bits_framebuffer=true
+          graphics/opengl_debug=false
+          EOF
+      - name: Import and export GLES2 test APK
+        run: |
+          mkdir -p "$HOME/.android"
           keytool -genkeypair -keystore "$HOME/.android/debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=Android Debug,O=Android,C=US" -noprompt
-          sed -i "s|keystore/debug=""|keystore/debug="$HOME/.android/debug.keystore"|" export_presets.cfg
-          godot3 --no-window --editor --path . --quit
-          godot3 --no-window --path . --export-debug Android build/CityFreedom-Makkah-V11-GLES2.apk
+          sed -i "s|keystore/debug=\"\"|keystore/debug=\"$HOME/.android/debug.keystore\"|" gles2-test/export_presets.cfg
+          godot3 --no-window --editor --path gles2-test --quit
+          godot3 --no-window --path gles2-test --export-debug Android ../build/CityFreedom-Makkah-V11-GLES2.apk
           test -s build/CityFreedom-Makkah-V11-GLES2.apk
-      - name: Upload Android APK
+      - name: Upload GLES2 APK
         uses: actions/upload-artifact@v4
         with:
-          name: CityFreedom-Makkah-V11-GLES2-APK
+          name: CityFreedom-Makkah-V11-GLES2
           path: build/CityFreedom-Makkah-V11-GLES2.apk
           if-no-files-found: error
