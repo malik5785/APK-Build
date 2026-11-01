@@ -10,6 +10,3 @@ TEST: Import project.godot; open main.tscn; F6.
 CONTROLS: WASD or left stick walk, E / gamepad A enter nearest car (within 7m) or exit, C / Y camera, B wardrobe, N day/night. Use on-screen menu for map, police car, camera, wardrobe.
 
 This build has not been run-tested in Godot.
-
-
-APK BUILD NOTE (2026-11-01): Original Godot 4 project build requested. This branch is not the separately uploaded V11 ZIP; do not label its APK as a completed V11 conversion.
